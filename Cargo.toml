@@ -1,0 +1,80 @@
+[package]
+name = "redactify"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Redact secrets and PII from text and structured files, with stable numbered redactions"
+license = "MIT"
+keywords = ["redaction", "secrets", "pii", "gitleaks", "security"]
+categories = ["command-line-utilities", "text-processing"]
+build = "build.rs"
+
+[features]
+default = ["cli", "parallel", "json", "yaml", "toml", "xml", "hcl", "ini", "dotenv", "properties", "csv", "plist"]
+cli = ["dep:clap", "dep:anyhow"]
+parallel = ["dep:rayon"]
+json = ["dep:jsonc-parser"]
+yaml = ["dep:saphyr-parser"]
+toml = ["dep:toml_edit"]
+xml = ["dep:quick-xml"]
+hcl = ["dep:hcl-edit"]
+ini = ["dep:ini-roundtrip"]
+dotenv = ["dep:ini-roundtrip"]
+properties = ["dep:java-properties", "dep:encoding_rs"]
+csv = ["dep:csv"]
+plist = ["dep:plist"]
+
+[dependencies]
+aho-corasick = "1"
+expr-lang = { version = "2.1", default-features = false, features = ["regex"] }
+flate2 = "1"
+indexmap = "2"
+memchr = "2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+sha2 = "0.11"
+thiserror = "2"
+tiktoken-rs = "0.12"
+toml = "1"
+url = "2"
+
+rayon = { version = "1", optional = true }
+
+jsonc-parser = { version = "0.33", optional = true }
+saphyr-parser = { version = "0.0.12", optional = true }
+toml_edit = { version = "0.25", optional = true }
+quick-xml = { version = "0.42", optional = true }
+hcl-edit = { version = "0.9", optional = true }
+ini-roundtrip = { version = "0.2", optional = true }
+java-properties = { version = "2", optional = true }
+encoding_rs = { version = "0.8", optional = true }
+csv = { version = "1", optional = true }
+plist = { version = "1", optional = true }
+
+clap = { version = "4", features = ["derive"], optional = true }
+anyhow = { version = "1", optional = true }
+
+[build-dependencies]
+sha2 = "0.11"
+ureq = "3"
+
+[dev-dependencies]
+criterion = "0.8"
+hcl-edit = "0.9"
+plist = "1"
+serde = "1"
+serde_json = "1"
+serde_yaml_ng = "0.10"
+tempfile = "3"
+toml_edit = "0.25"
+
+[[bin]]
+name = "redactify"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[bench]]
+name = "redact"
+harness = false
