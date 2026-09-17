@@ -22,6 +22,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use expr::{Context, Environment, Program, Value};
+use include_dir::{Dir, include_dir};
 use indexmap::IndexMap;
 use memchr::memmem;
 use regex::Regex;
@@ -33,8 +34,20 @@ use super::placeholder::is_placeholder;
 use super::{Detection, Detector, LeafContext};
 use crate::Error;
 
-static DEFAULT_TOML: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/betterleaks.toml"));
-static WORDS_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/words.txt.gz"));
+/// The vendored betterleaks release; refresh it with
+/// `scripts/update-betterleaks.rs`.
+static BETTERLEAKS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/vendor/betterleaks");
+
+fn vendored(name: &str) -> &'static [u8] {
+    BETTERLEAKS
+        .get_file(name)
+        .unwrap_or_else(|| panic!("vendor/betterleaks/{name} is missing"))
+        .contents()
+}
+
+fn default_toml() -> &'static str {
+    std::str::from_utf8(vendored("betterleaks.toml")).expect("bundled ruleset is UTF-8")
+}
 
 /// Comments that mark a line as intentionally containing a secret.
 const ALLOW_SIGNATURES: &[&str] = &["betterleaks:allow", "gitleaks:allow"];
@@ -57,11 +70,7 @@ impl RulesetDetector {
     /// The bundled betterleaks ruleset.
     pub fn default_rules() -> &'static RulesetDetector {
         static DEFAULT: LazyLock<RulesetDetector> = LazyLock::new(|| {
-            let source = std::str::from_utf8(DEFAULT_TOML).expect("bundled ruleset is UTF-8");
-            if source.trim().is_empty() {
-                return RulesetDetector::empty();
-            }
-            RulesetDetector::from_toml(source).expect("bundled ruleset is valid")
+            RulesetDetector::from_toml(default_toml()).expect("bundled ruleset is valid")
         });
         &DEFAULT
     }
@@ -77,10 +86,8 @@ impl RulesetDetector {
         let mut config: RawConfig =
             toml::from_str(source).map_err(|err| Error::Ruleset(err.to_string()))?;
         if config.extend.use_default {
-            let base: RawConfig = toml::from_str(
-                std::str::from_utf8(DEFAULT_TOML).expect("bundled ruleset is UTF-8"),
-            )
-            .map_err(|err| Error::Ruleset(err.to_string()))?;
+            let base: RawConfig =
+                toml::from_str(default_toml()).map_err(|err| Error::Ruleset(err.to_string()))?;
             config = base.extended_by(config);
         }
         Self::build(config)
@@ -959,9 +966,9 @@ mod tokens {
 
     static WORDS: LazyLock<HashSet<String>> = LazyLock::new(|| {
         let mut text = String::new();
-        if !WORDS_GZ.is_empty() {
-            let _ = flate2::read::GzDecoder::new(WORDS_GZ).read_to_string(&mut text);
-        }
+        flate2::read::GzDecoder::new(vendored("words.txt.gz"))
+            .read_to_string(&mut text)
+            .expect("bundled word list is valid gzip text");
         text.lines()
             .filter(|w| !w.is_empty())
             .map(str::to_owned)
@@ -1021,6 +1028,11 @@ mod tests {
         let mut out = Vec::new();
         detector.detect(s, &LeafContext::default(), &mut out);
         out.iter().map(|d| s[d.range.clone()].to_owned()).collect()
+    }
+
+    #[test]
+    fn bundled_word_list_loads() {
+        assert!(tokens::contains_word("password", 8));
     }
 
     #[test]
