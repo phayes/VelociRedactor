@@ -2,7 +2,9 @@
 
 use std::sync::LazyLock;
 
-use redactify::{Allow, FormatHint, Redactor};
+use std::collections::HashMap;
+
+use redactify::{Allow, FormatHint, Redaction, Redactor};
 
 /// A value whose Shannon entropy is above the default threshold.
 pub const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
@@ -13,9 +15,34 @@ pub fn redactor() -> &'static Redactor {
     &REDACTOR
 }
 
+/// Replace each `[REDACTION|…]` token with `REDACTION-<n>`, numbering
+/// distinct keys in order of first appearance, so expectations stay readable.
+pub fn normalize(output: &str) -> String {
+    let mut numbers: HashMap<String, usize> = HashMap::new();
+    let mut out = String::with_capacity(output.len());
+    let mut prev = 0;
+    for range in redactify::find_tokens(output) {
+        let key = redactify::token_key(&output[range.clone()])
+            .unwrap()
+            .to_owned();
+        let next = numbers.len() + 1;
+        let n = *numbers.entry(key).or_insert(next);
+        out.push_str(&output[prev..range.start]);
+        out.push_str(&format!("REDACTION-{n}"));
+        prev = range.end;
+    }
+    out.push_str(&output[prev..]);
+    out
+}
+
+/// Render `redaction` and normalize the tokens.
+pub fn rendered(redaction: &Redaction<'_>, allow: &Allow) -> String {
+    normalize(&String::from_utf8(redaction.render(allow).unwrap()).unwrap())
+}
+
 /// Redact `input` as plain text.
 pub fn text(input: &str) -> String {
-    redactor().redact_str(input)
+    normalize(&redactor().redact_str(input))
 }
 
 /// Redact `input` as the named format, with nothing allowed.
@@ -23,7 +50,7 @@ pub fn as_format(format: &str, input: &str) -> String {
     let redaction = redactor()
         .redact(input.as_bytes(), FormatHint::Name(format))
         .unwrap_or_else(|e| panic!("redact as {format}: {e}"));
-    String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap()
+    rendered(&redaction, &Allow::none())
 }
 
 /// Assert that each `(input, want)` pair redacts as plain text to `want`.

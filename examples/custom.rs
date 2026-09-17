@@ -72,11 +72,7 @@ fn main() {
         .expect("valid input");
 
     for finding in redaction.findings() {
-        println!(
-            "{} found by {}",
-            redactify::token(finding.id),
-            finding.detector
-        );
+        println!("{} found by {}", finding.key, finding.detector);
     }
     let output = redaction.render(&Allow::none()).expect("renders");
     print!("{}", String::from_utf8_lossy(&output));

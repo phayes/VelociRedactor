@@ -9,7 +9,7 @@ use crate::format::{
     Container, Edit, Format, FormatRegistry, Leaf, LeafVisitor, Replacement, apply_edits,
 };
 use crate::policy::{DefaultPolicy, LeafPolicy};
-use crate::render::{self, Allow};
+use crate::render::{self, Allow, DEFAULT_SALT};
 
 /// Configures a [`Redactor`].
 ///
@@ -22,6 +22,7 @@ pub struct RedactorBuilder {
     pii: Vec<Pii>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
+    salt: Vec<u8>,
 }
 
 impl Default for RedactorBuilder {
@@ -38,6 +39,7 @@ impl RedactorBuilder {
             pii: Vec::new(),
             formats: FormatRegistry::text_only(),
             policy: Arc::new(DefaultPolicy),
+            salt: DEFAULT_SALT.as_bytes().to_vec(),
         }
     }
 
@@ -100,6 +102,17 @@ impl RedactorBuilder {
         self
     }
 
+    /// Set the salt mixed into redaction keys (default
+    /// [`DEFAULT_SALT`](crate::DEFAULT_SALT)).
+    ///
+    /// Keys only stay the same across runs if the salt does, so use a fixed
+    /// salt when allow lists are stored by key. A secret salt keeps keys from
+    /// being used to confirm guesses of short secrets.
+    pub fn salt(mut self, salt: impl Into<Vec<u8>>) -> Self {
+        self.salt = salt.into();
+        self
+    }
+
     pub fn build(self) -> Redactor {
         let mut detectors = self.detectors;
         if let Some(ruleset) = self.ruleset {
@@ -110,6 +123,7 @@ impl RedactorBuilder {
             detectors: detectors.into(),
             formats: self.formats,
             policy: self.policy,
+            salt: self.salt.into(),
         }
     }
 }
@@ -133,6 +147,7 @@ pub struct Redactor {
     detectors: Arc<[Box<dyn Detector>]>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
+    salt: Arc<[u8]>,
 }
 
 impl Default for Redactor {
@@ -165,11 +180,10 @@ impl Redactor {
         String::from_utf8(bytes).expect("redacting UTF-8 text yields UTF-8")
     }
 
-    /// Scan `input` and number every finding.
+    /// Scan `input` and identify every secret.
     ///
     /// The returned [`Redaction`] can be rendered any number of times with
-    /// different [`Allow`] lists; numbering depends only on the input and
-    /// this redactor's configuration.
+    /// different [`Allow`] lists.
     ///
     /// If the input does not parse as the chosen format, it is redacted as
     /// plain text instead and a warning is recorded, unless the format was
@@ -223,7 +237,7 @@ impl Redactor {
             findings: Vec::new(),
             warnings,
         };
-        redaction.number(&collector.leaves, detected);
+        redaction.identify(&self.salt, &collector.leaves, detected);
         Ok(redaction)
     }
 
@@ -251,33 +265,48 @@ impl Redactor {
     }
 }
 
-/// The result of scanning an input: numbered findings, ready to render.
+/// The result of scanning an input: identified secrets, ready to render.
 pub struct Redaction<'a> {
     input: &'a [u8],
     format: Arc<dyn Format>,
-    /// Redacted ranges and their ids, by leaf index.
-    leaves: HashMap<usize, Vec<(Range<usize>, u32)>>,
+    /// Redacted ranges and the index of their finding, by leaf index.
+    leaves: HashMap<usize, Vec<(Range<usize>, usize)>>,
     findings: Vec<Finding>,
     warnings: Vec<String>,
 }
 
-/// One numbered redaction. Every occurrence of the same text shares an id.
+/// One redacted secret. Every occurrence of the same text shares a finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    /// The number shown in `REDACTION-<id>`, starting at 1.
-    pub id: u32,
+    /// Salted BLAKE3 hash of the secret, as 64 lowercase hex digits. See
+    /// [`redaction_key`](crate::redaction_key).
+    pub key: String,
     /// The redacted text.
     pub secret: String,
     /// What detected the first occurrence.
     pub detector: String,
-    /// Key of the value containing the first occurrence, if any.
-    pub key: Option<String>,
-    /// Byte offset of the first occurrence in the input, when the format
-    /// reports value positions. Approximate for values containing escape
-    /// sequences.
-    pub offset: Option<usize>,
+    /// Length of the secret in bytes.
+    pub len: usize,
+    /// Field (object key) of the value containing the first occurrence, if any.
+    pub field: Option<String>,
+    /// Byte offsets of every occurrence in the input, ascending, when the
+    /// format reports value positions. Approximate for values containing
+    /// escape sequences.
+    pub offsets: Vec<usize>,
     /// How many times the text was redacted.
     pub occurrences: usize,
+}
+
+impl Finding {
+    /// The replacement token for this secret.
+    pub fn token(&self) -> String {
+        render::token(&self.detector, self.len, &self.key)
+    }
+
+    /// Byte offset of the first occurrence, when known.
+    pub fn offset(&self) -> Option<usize> {
+        self.offsets.first().copied()
+    }
 }
 
 impl Redaction<'_> {
@@ -286,7 +315,7 @@ impl Redaction<'_> {
         self.format.name()
     }
 
-    /// Findings ordered by id.
+    /// Findings in order of first appearance.
     pub fn findings(&self) -> &[Finding] {
         &self.findings
     }
@@ -306,19 +335,24 @@ impl Redaction<'_> {
 
     /// The input with every finding not in `allow` replaced by its token.
     pub fn render(&self, allow: &Allow) -> Result<Vec<u8>, Error> {
-        if self.findings.iter().all(|f| allow.contains(f.id)) {
+        if self.findings.iter().all(|f| allow.allows(f)) {
             return Ok(self.input.to_vec());
         }
+        let tokens: Vec<Option<String>> = self
+            .findings
+            .iter()
+            .map(|f| (!allow.allows(f)).then(|| f.token()))
+            .collect();
         let mut visitor = Renderer {
             leaves: &self.leaves,
-            allow,
+            tokens: &tokens,
             index: 0,
         };
         Ok(self.format.rewrite(self.input, &mut visitor)?)
     }
 
-    fn number(&mut self, leaves: &[CollectedLeaf], detected: Vec<Vec<Detection>>) {
-        let mut ids: HashMap<String, u32> = HashMap::new();
+    fn identify(&mut self, salt: &[u8], leaves: &[CollectedLeaf], detected: Vec<Vec<Detection>>) {
+        let mut by_secret: HashMap<String, usize> = HashMap::new();
         for (leaf, detections) in leaves.iter().zip(detected) {
             if detections.is_empty() {
                 continue;
@@ -326,23 +360,19 @@ impl Redaction<'_> {
             let mut ranges = Vec::with_capacity(detections.len());
             for detection in detections {
                 let text = &leaf.value[detection.range.clone()];
-                let id = match ids.get(text) {
-                    Some(&id) => id,
-                    None => {
-                        let id = self.findings.len() as u32 + 1;
-                        ids.insert(text.to_owned(), id);
-                        self.findings.push(Finding {
-                            id,
-                            secret: text.to_owned(),
-                            detector: detection.label,
-                            key: leaf.key.clone(),
-                            offset: leaf.offset.map(|o| o + detection.range.start),
-                            occurrences: 0,
-                        });
-                        id
-                    }
-                };
-                ranges.push((detection.range, id));
+                let index = *by_secret.entry(text.to_owned()).or_insert_with(|| {
+                    self.findings.push(Finding {
+                        key: render::redaction_key(salt, text),
+                        secret: text.to_owned(),
+                        detector: detection.label,
+                        len: text.len(),
+                        field: leaf.key.clone(),
+                        offsets: Vec::new(),
+                        occurrences: 0,
+                    });
+                    self.findings.len() - 1
+                });
+                ranges.push((detection.range, index));
             }
             self.leaves.insert(leaf.index, ranges);
         }
@@ -352,20 +382,26 @@ impl Redaction<'_> {
         // Substring matches are not propagated, since short secrets would
         // then match unrelated text.
         for leaf in leaves {
-            let Some(&id) = ids.get(leaf.value.as_str()) else {
-                continue;
-            };
-            self.leaves
-                .insert(leaf.index, vec![(0..leaf.value.len(), id)]);
+            if let Some(&index) = by_secret.get(leaf.value.as_str()) {
+                self.leaves
+                    .insert(leaf.index, vec![(0..leaf.value.len(), index)]);
+            }
         }
 
-        for finding in &mut self.findings {
-            finding.occurrences = 0;
-        }
-        for ranges in self.leaves.values() {
-            for (_, id) in ranges {
-                self.findings[*id as usize - 1].occurrences += 1;
+        for leaf in leaves {
+            let Some(ranges) = self.leaves.get(&leaf.index) else {
+                continue;
+            };
+            for (range, index) in ranges {
+                let finding = &mut self.findings[*index];
+                finding.occurrences += 1;
+                if let Some(offset) = leaf.offset {
+                    finding.offsets.push(offset + range.start);
+                }
             }
+        }
+        for finding in &mut self.findings {
+            finding.offsets.sort_unstable();
         }
     }
 }
@@ -448,8 +484,9 @@ impl LeafVisitor for Collector<'_> {
 
 /// Replaces recorded ranges with tokens.
 struct Renderer<'r> {
-    leaves: &'r HashMap<usize, Vec<(Range<usize>, u32)>>,
-    allow: &'r Allow,
+    leaves: &'r HashMap<usize, Vec<(Range<usize>, usize)>>,
+    /// The token for each finding, or `None` if it is allowed.
+    tokens: &'r [Option<String>],
     index: usize,
 }
 
@@ -464,10 +501,12 @@ impl LeafVisitor for Renderer<'_> {
         let ranges = self.leaves.get(&index)?;
         let edits: Vec<Edit> = ranges
             .iter()
-            .filter(|(range, id)| !self.allow.contains(*id) && range.end <= leaf.value.len())
-            .map(|(range, id)| Edit {
-                range: range.clone(),
-                text: render::token(*id),
+            .filter(|(range, _)| range.end <= leaf.value.len())
+            .filter_map(|(range, index)| {
+                Some(Edit {
+                    range: range.clone(),
+                    text: self.tokens[*index].clone()?,
+                })
             })
             .collect();
         if edits.is_empty() {

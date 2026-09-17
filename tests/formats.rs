@@ -32,6 +32,7 @@ single: 'it''s {S}'
 list:
   - plain
   - {S}
+flow: [a, {S}]
 db:
   host: db.example.com
   user: svc
@@ -50,16 +51,17 @@ second: {S}
     );
     let want = r#"# deployment settings
 service: api   # trailing comment
-token: REDACTION-1
+token: "REDACTION-1"
 quoted: "prefix REDACTION-1 suffix"
 single: 'it''s REDACTION-1'
 list:
   - plain
-  - REDACTION-1
+  - "REDACTION-1"
+flow: [a, "REDACTION-1"]
 db:
   host: db.example.com
   user: svc
-  password: REDACTION-2
+  password: "REDACTION-2"
 session_id: sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA
 block: |
   first line
@@ -69,14 +71,29 @@ folded: >-
   some folded
   text REDACTION-1
 ---
-second: REDACTION-1
+second: "REDACTION-1"
 "#;
-    check("yaml", &input, want);
-    for doc in serde_yaml_ng::Deserializer::from_str(want) {
-        serde::Deserialize::deserialize(doc)
-            .map(|_: serde_yaml_ng::Value| ())
-            .unwrap();
-    }
+    let got = as_format("yaml", &input);
+    assert_eq!(got, want);
+
+    // Redacted values stay strings when the real output is parsed.
+    let raw = redactor()
+        .redact(input.as_bytes(), FormatHint::Name("yaml"))
+        .unwrap()
+        .render(&Allow::none())
+        .unwrap();
+    let raw = String::from_utf8(raw).unwrap();
+    let docs: Vec<serde_yaml_ng::Value> = serde_yaml_ng::Deserializer::from_str(&raw)
+        .map(|doc| serde::Deserialize::deserialize(doc).unwrap())
+        .collect();
+    let token = docs[0]["token"].as_str().unwrap();
+    assert!(redactify::is_redaction_token(token), "{token}");
+    assert!(redactify::is_redaction_token(
+        docs[0]["flow"][1].as_str().unwrap()
+    ));
+    assert!(redactify::is_redaction_token(
+        docs[1]["second"].as_str().unwrap()
+    ));
     unchanged_without_secrets("yaml", "a: 1\nb: [x, y]\nc: {d: e}\n");
 }
 
@@ -352,12 +369,14 @@ fn binary_plist() {
     let out = redaction.render(&Allow::none()).unwrap();
     let value = plist::Value::from_reader(std::io::Cursor::new(out)).unwrap();
     let dict = value.as_dictionary().unwrap();
-    assert_eq!(dict["token"].as_string(), Some("REDACTION-1"));
+    let token = redaction.findings()[0].token();
+    assert_eq!(dict["token"].as_string(), Some(token.as_str()));
     assert_eq!(dict["session_id"].as_string(), Some(S));
     assert_eq!(dict["count"].as_signed_integer(), Some(3));
 
     // Nothing to redact: the original bytes are returned.
-    assert_eq!(redaction.render(&Allow::ids([1])).unwrap(), input);
+    let key = &redaction.findings()[0].key;
+    assert_eq!(redaction.render(&Allow::keys([key])).unwrap(), input);
 }
 
 #[test]
@@ -398,11 +417,15 @@ fn traversal_order_is_stable() {
         .redact(input.as_bytes(), FormatHint::Name("yaml"))
         .unwrap();
     assert_eq!(redaction.findings().len(), 2);
-    let all = String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap();
-    let keep_two = String::from_utf8(redaction.render(&Allow::ids([2])).unwrap()).unwrap();
-    assert_eq!(all, "a: REDACTION-1\nb: REDACTION-2\nc: REDACTION-1\n");
+    let all = rendered(&redaction, &Allow::none());
+    let second = &redaction.findings()[1].key;
+    let keep_two = rendered(&redaction, &Allow::keys([second]));
+    assert_eq!(
+        all,
+        "a: \"REDACTION-1\"\nb: \"REDACTION-2\"\nc: \"REDACTION-1\"\n"
+    );
     assert_eq!(
         keep_two,
-        format!("a: REDACTION-1\nb: other-{S}x\nc: REDACTION-1\n")
+        format!("a: \"REDACTION-1\"\nb: other-{S}x\nc: \"REDACTION-1\"\n")
     );
 }

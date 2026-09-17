@@ -290,10 +290,18 @@ fn bounded_credential_values() {
 
 #[test]
 fn bounded_credential_value_over_redaction_guards() {
+    let already_redacted = format!(
+        "DB_PASSWORD={}",
+        redactify::token(
+            "credential-assignment",
+            7,
+            &redactify::redaction_key(b"x", "hunter2")
+        )
+    );
     assert_text_cases(&[
         ("DB_PASSWORD=${DB_PASSWORD}", "DB_PASSWORD=${DB_PASSWORD}"),
         ("DB_PASSWORD=REDACTED", "DB_PASSWORD=REDACTED"),
-        ("DB_PASSWORD=REDACTION-4", "DB_PASSWORD=REDACTION-4"),
+        (already_redacted.as_str(), "DB_PASSWORD=REDACTION-1"),
         (
             "the password field should be rotated regularly",
             "the password field should be rotated regularly",
@@ -434,5 +442,9 @@ fn invalid_utf8_is_passed_through() {
         .redact(&input, redactify::FormatHint::Name("text"))
         .unwrap();
     let out = redaction.render(&redactify::Allow::none()).unwrap();
-    assert_eq!(out, b"key \xff\xfe REDACTION-1");
+    let token = redaction.findings()[0].token();
+    assert_eq!(
+        out,
+        [b"key \xff\xfe ".as_slice(), token.as_bytes()].concat()
+    );
 }

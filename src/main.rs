@@ -1,32 +1,96 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use redactify::detect::{Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir};
-use redactify::{Allow, Finding, FormatHint, Redaction, Redactor};
+use redactify::{Allow, DEFAULT_SALT, Finding, FormatHint, Redaction, Redactor};
+use serde_json::json;
 
-/// Redact secrets and personal data from a file.
+/// Redact secrets and personal data from files.
 ///
-/// Each distinct redacted value becomes a numbered token such as
-/// `REDACTION-3`. Numbers are stable for a given input and configuration, so
-/// false positives can be let through by re-running with `--allow 3`.
+/// Each redacted value becomes a token `[REDACTION|<detector>|<len>|<key>]`,
+/// where `key` is the BLAKE3 hash of the salt followed by the value. Keys stay
+/// the same as long as the salt does, so false positives can be let through
+/// with `--allow-key` without writing the value down.
 #[derive(Debug, Parser)]
 #[command(version, about, long_about)]
 struct Cli {
-    /// File to redact. Reads standard input when omitted or `-`.
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Write the input with secrets replaced by redaction tokens.
+    Redact(RedactArgs),
+    /// List the secrets that would be redacted.
+    List(ListArgs),
+    /// List the supported input formats.
+    Formats,
+}
+
+#[derive(Debug, Args)]
+struct RedactArgs {
+    #[command(flatten)]
+    input: InputArgs,
+
+    /// Write the result to this file instead of standard output.
+    #[arg(short, long, value_name = "FILE", conflicts_with = "in_place")]
+    output: Option<PathBuf>,
+
+    /// Overwrite the input file with the result.
+    #[arg(short, long)]
+    in_place: bool,
+
+    /// Exit with status 1 if anything was redacted (after allow lists).
+    #[arg(long)]
+    check: bool,
+}
+
+#[derive(Debug, Args)]
+struct ListArgs {
+    #[command(flatten)]
+    input: InputArgs,
+
+    /// Print the list as JSON.
+    #[arg(long)]
+    json: bool,
+
+    /// Include redacted values in the list.
+    #[arg(long)]
+    show_value: bool,
+
+    /// Exit with status 1 if anything would be redacted (after allow lists).
+    #[arg(long)]
+    check: bool,
+}
+
+/// Options shared by `redact` and `list`.
+#[derive(Debug, Args)]
+struct InputArgs {
+    /// File to read. Reads standard input when omitted or `-`.
     file: Option<PathBuf>,
 
     /// Input format. Detected from the file name or content when omitted.
     #[arg(short, long, value_name = "NAME")]
     format: Option<String>,
 
-    /// Redaction numbers to leave unredacted (comma-separated, repeatable).
-    #[arg(short, long, value_name = "IDS", value_delimiter = ',')]
-    allow: Vec<u32>,
+    /// Salt mixed into redaction keys. Use the same salt on every run for
+    /// keys to stay the same.
+    #[arg(long, env = "REDACTIFY_SALT", default_value = DEFAULT_SALT, hide_env_values = true)]
+    salt: String,
+
+    /// Leave the secret with this key unredacted (repeatable). A full
+    /// `[REDACTION|…]` token is also accepted.
+    #[arg(long, value_name = "KEY")]
+    allow_key: Vec<String>,
+
+    /// Leave this exact value unredacted (repeatable).
+    #[arg(long, value_name = "VALUE")]
+    allow_value: Vec<String>,
 
     /// Also redact personal data (comma-separated: email, phone, address).
     #[arg(long, value_name = "KINDS", value_delimiter = ',')]
@@ -47,30 +111,21 @@ struct Cli {
     /// Use this betterleaks/gitleaks ruleset instead of the bundled one.
     #[arg(long, value_name = "FILE")]
     ruleset: Option<PathBuf>,
+}
 
-    /// Write the result to this file instead of standard output.
-    #[arg(short, long, value_name = "FILE", conflicts_with = "in_place")]
-    output: Option<PathBuf>,
-
-    /// Overwrite the input file with the result.
-    #[arg(short, long, requires = "file")]
-    in_place: bool,
-
-    /// Print a table of redactions to standard error.
-    #[arg(short, long)]
-    list: bool,
-
-    /// Exit with status 1 if anything was redacted (after `--allow`).
-    #[arg(long)]
-    check: bool,
-
-    /// Print the available formats and exit.
-    #[arg(long)]
-    list_formats: bool,
+impl InputArgs {
+    fn path(&self) -> Option<&Path> {
+        self.file.as_deref().filter(|p| *p != Path::new("-"))
+    }
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let result = match Cli::parse().command {
+        Command::Redact(args) => redact(args),
+        Command::List(args) => list(args),
+        Command::Formats => formats(),
+    };
+    match result {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -79,29 +134,81 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<ExitCode> {
-    let redactor = build_redactor(&cli)?;
-
-    if cli.list_formats {
-        for format in redactor.formats().iter() {
-            println!("{:<12} {}", format.name(), format.extensions().join(", "));
-        }
-        return Ok(ExitCode::SUCCESS);
+fn redact(args: RedactArgs) -> Result<ExitCode> {
+    let path = args.input.path();
+    if args.in_place && path.is_none() {
+        bail!("--in-place needs a file");
     }
+    let redactor = build_redactor(&args.input)?;
+    let input = read_input(path)?;
+    let (redaction, allow) = scan(&redactor, &args.input, &input)?;
 
-    let path = cli.file.as_deref().filter(|p| *p != Path::new("-"));
-    let input = match path {
-        Some(path) => fs::read(path).with_context(|| format!("reading {}", path.display()))?,
+    let output = redaction.render(&allow)?;
+    match (&args.output, path) {
+        (Some(out), _) => {
+            fs::write(out, &output).with_context(|| format!("writing {}", out.display()))?
+        }
+        (None, Some(path)) if args.in_place => {
+            fs::write(path, &output).with_context(|| format!("writing {}", path.display()))?
+        }
+        _ => io::stdout()
+            .write_all(&output)
+            .context("writing standard output")?,
+    }
+    Ok(exit_code(args.check, &redaction, &allow))
+}
+
+fn list(args: ListArgs) -> Result<ExitCode> {
+    let redactor = build_redactor(&args.input)?;
+    let input = read_input(args.input.path())?;
+    let (redaction, allow) = scan(&redactor, &args.input, &input)?;
+
+    let mut stdout = io::stdout().lock();
+    if args.json {
+        print_json(&mut stdout, &redaction, &allow, args.show_value)?;
+    } else {
+        print_table(&mut stdout, &redaction, &allow, args.show_value)?;
+    }
+    Ok(exit_code(args.check, &redaction, &allow))
+}
+
+fn formats() -> Result<ExitCode> {
+    let redactor = Redactor::builder().build();
+    for format in redactor.formats().iter() {
+        println!("{:<12} {}", format.name(), format.extensions().join(", "));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn exit_code(check: bool, redaction: &Redaction<'_>, allow: &Allow) -> ExitCode {
+    let remaining = redaction.findings().iter().any(|f| !allow.allows(f));
+    if check && remaining {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn read_input(path: Option<&Path>) -> Result<Vec<u8>> {
+    match path {
+        Some(path) => fs::read(path).with_context(|| format!("reading {}", path.display())),
         None => {
             let mut buf = Vec::new();
             io::stdin()
                 .read_to_end(&mut buf)
                 .context("reading standard input")?;
-            buf
+            Ok(buf)
         }
-    };
+    }
+}
 
-    let hint = match (&cli.format, path) {
+/// Redact `input` and build the allow list, printing warnings to stderr.
+fn scan<'a>(
+    redactor: &Redactor,
+    args: &InputArgs,
+    input: &'a [u8],
+) -> Result<(Redaction<'a>, Allow)> {
+    let hint = match (&args.format, args.path()) {
         (Some(name), _) => {
             if redactor.formats().get(name).is_none() {
                 let names: Vec<_> = redactor.formats().names().collect();
@@ -113,57 +220,46 @@ fn run(cli: Cli) -> Result<ExitCode> {
         (None, None) => FormatHint::Auto,
     };
 
-    let redaction = redactor.redact(&input, hint)?;
+    for key in &args.allow_key {
+        let key = redactify::token_key(key.trim()).unwrap_or(key.trim());
+        if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+            bail!("--allow-key {key:?} is not a 64-digit hex key");
+        }
+    }
+
+    let redaction = redactor.redact(input, hint)?;
+    let allow = Allow::keys(&args.allow_key).with_values(args.allow_value.iter().cloned());
+
     for warning in redaction.warnings() {
         eprintln!("warning: {warning}");
     }
-
-    let allow = Allow::ids(cli.allow.iter().copied());
-    let known: BTreeSet<u32> = redaction.findings().iter().map(|f| f.id).collect();
-    for id in cli.allow.iter().filter(|id| !known.contains(id)) {
-        eprintln!("warning: --allow {id}: no such redaction");
+    for key in allow.unmatched_keys(redaction.findings()) {
+        eprintln!("warning: --allow-key {key}: no such redaction");
     }
-
-    let output = redaction.render(&allow)?;
-    if cli.list {
-        print_table(&redaction, &allow);
+    let unmatched_values = allow.unmatched_value_count(redaction.findings());
+    if unmatched_values > 0 {
+        eprintln!("warning: {unmatched_values} --allow-value value(s) matched no redaction");
     }
-
-    match (&cli.output, cli.in_place, path) {
-        (Some(out), _, _) => {
-            fs::write(out, &output).with_context(|| format!("writing {}", out.display()))?
-        }
-        (None, true, Some(path)) => {
-            fs::write(path, &output).with_context(|| format!("writing {}", path.display()))?
-        }
-        _ => io::stdout()
-            .write_all(&output)
-            .context("writing standard output")?,
-    }
-
-    let remaining = redaction.findings().iter().any(|f| !allow.contains(f.id));
-    Ok(if cli.check && remaining {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    })
+    Ok((redaction, allow))
 }
 
-fn build_redactor(cli: &Cli) -> Result<Redactor> {
-    let mut builder = Redactor::builder().pii(cli.pii.iter().copied());
+fn build_redactor(args: &InputArgs) -> Result<Redactor> {
+    let mut builder = Redactor::builder()
+        .salt(args.salt.as_bytes())
+        .pii(args.pii.iter().copied());
 
-    if let Some(path) = &cli.ruleset {
+    if let Some(path) = &args.ruleset {
         builder = builder.ruleset(RulesetDetector::from_path(path)?);
     }
-    for spec in &cli.rule {
+    for spec in &args.rule {
         let (label, pattern) = split_spec(spec, "--rule")?;
         builder = builder.detector(RegexDetector::new(label, pattern)?);
     }
-    for spec in &cli.pii_pattern {
+    for spec in &args.pii_pattern {
         let (label, pattern) = split_spec(spec, "--pii-pattern")?;
         builder = builder.detector(RegexDetector::new(format!("pii:{label}"), pattern)?);
     }
-    for path in &cli.rules_pack {
+    for path in &args.rules_pack {
         let packs = if path.is_dir() {
             let loaded = load_pack_dir(path)?;
             for warning in &loaded.warnings {
@@ -195,28 +291,45 @@ fn split_spec<'a>(spec: &'a str, flag: &str) -> Result<(&'a str, &'a str)> {
     }
 }
 
-fn print_table(redaction: &Redaction<'_>, allow: &Allow) {
-    let mut stderr = io::stderr().lock();
+fn print_table(
+    out: &mut impl Write,
+    redaction: &Redaction<'_>,
+    allow: &Allow,
+    show_value: bool,
+) -> Result<()> {
     if redaction.findings().is_empty() {
-        let _ = writeln!(stderr, "no redactions");
-        return;
+        writeln!(out, "no redactions")?;
+        return Ok(());
     }
-    let rows: Vec<[String; 5]> = redaction
+
+    let mut header = vec!["KEY", "DETECTOR", "START", "LEN", "COUNT", "LOCATION"];
+    if show_value {
+        header.push("VALUE");
+    }
+    header.push("");
+    let header: Vec<String> = header.into_iter().map(String::from).collect();
+
+    let rows: Vec<Vec<String>> = redaction
         .findings()
         .iter()
         .map(|f| {
-            let status = if allow.contains(f.id) { "allowed" } else { "" };
-            [
-                redactify::token(f.id),
+            let mut row = vec![
+                f.key.clone(),
                 f.detector.clone(),
+                f.offset().map_or_else(|| "-".into(), |o| o.to_string()),
+                f.len.to_string(),
+                f.occurrences.to_string(),
                 location(redaction, f),
-                preview(f),
-                status.to_owned(),
-            ]
+            ];
+            if show_value {
+                row.push(format!("{:?}", f.secret));
+            }
+            row.push(if allow.allows(f) { "allowed" } else { "" }.into());
+            row
         })
         .collect();
-    let header = ["TOKEN", "DETECTOR", "LOCATION", "VALUE", ""].map(String::from);
-    let mut widths = [0; 5];
+
+    let mut widths = vec![0; header.len()];
     for row in std::iter::once(&header).chain(&rows) {
         for (w, cell) in widths.iter_mut().zip(row) {
             *w = (*w).max(cell.chars().count());
@@ -225,35 +338,65 @@ fn print_table(redaction: &Redaction<'_>, allow: &Allow) {
     for row in std::iter::once(&header).chain(&rows) {
         let line: Vec<String> = row
             .iter()
-            .zip(widths)
+            .zip(&widths)
             .map(|(cell, w)| format!("{cell:<w$}"))
             .collect();
-        let _ = writeln!(stderr, "{}", line.join("  ").trim_end());
+        writeln!(out, "{}", line.join("  ").trim_end())?;
     }
+    Ok(())
+}
+
+fn print_json(
+    out: &mut impl Write,
+    redaction: &Redaction<'_>,
+    allow: &Allow,
+    show_value: bool,
+) -> Result<()> {
+    let redactions: Vec<_> = redaction
+        .findings()
+        .iter()
+        .map(|f| {
+            let (line, column) = f
+                .offset()
+                .map(|o| redaction.line_col(o))
+                .map_or((None, None), |(l, c)| (Some(l), Some(c)));
+            let mut entry = json!({
+                "key": f.key,
+                "token": f.token(),
+                "detector": f.detector,
+                "start": f.offset(),
+                "length": f.len,
+                "line": line,
+                "column": column,
+                "field": f.field,
+                "occurrences": f.occurrences,
+                "offsets": f.offsets,
+                "allowed": allow.allows(f),
+            });
+            if show_value {
+                entry["value"] = json!(f.secret);
+            }
+            entry
+        })
+        .collect();
+    let document = json!({
+        "format": redaction.format(),
+        "redactions": redactions,
+        "warnings": redaction.warnings(),
+    });
+    serde_json::to_writer_pretty(&mut *out, &document)?;
+    writeln!(out)?;
+    Ok(())
 }
 
 fn location(redaction: &Redaction<'_>, finding: &Finding) -> String {
     let mut parts = Vec::new();
-    if let Some(offset) = finding.offset {
+    if let Some(offset) = finding.offset() {
         let (line, col) = redaction.line_col(offset);
         parts.push(format!("{line}:{col}"));
     }
-    if let Some(key) = &finding.key {
-        parts.push(format!("[{key}]"));
-    }
-    if finding.occurrences > 1 {
-        parts.push(format!("(x{})", finding.occurrences));
+    if let Some(field) = &finding.field {
+        parts.push(format!("[{field}]"));
     }
     parts.join(" ")
-}
-
-/// A short hint of the redacted value that does not reveal it.
-fn preview(finding: &Finding) -> String {
-    let chars: Vec<char> = finding.secret.chars().collect();
-    let shown = (chars.len() / 5).min(4);
-    let head: String = chars[..shown]
-        .iter()
-        .map(|c| if c.is_control() { ' ' } else { *c })
-        .collect();
-    format!("{head}… ({} chars)", chars.len())
 }

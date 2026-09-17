@@ -7,10 +7,10 @@ use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
 
 /// YAML, including multi-document streams.
 ///
-/// Scalars are edited in place. When a redacted value cannot be mapped back
-/// onto the original text, quoted and plain scalars are rewritten as
-/// double-quoted strings and block scalars are rewritten in the same block
-/// style.
+/// Quoted and block scalars are edited in place. Redacted plain scalars are
+/// rewritten as double-quoted strings, as are quoted scalars whose redacted
+/// text cannot be mapped back onto the original. Block scalars that cannot be
+/// edited in place are rewritten in the same block style.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Yaml;
 
@@ -180,13 +180,10 @@ fn walk(
                     });
                 }
                 ScalarStyle::Plain => {
-                    splicer.apply(
-                        span.clone(),
-                        span.clone(),
-                        value,
-                        &replacement,
-                        double_quoted,
-                    );
+                    // Replacement tokens contain `[`, `]`, and `|`, which change
+                    // the meaning of a plain scalar (a leading `[` starts a flow
+                    // sequence), so redacted plain scalars are always quoted.
+                    splicer.replace(span.clone(), double_quoted(&replacement.value));
                 }
             }
         }

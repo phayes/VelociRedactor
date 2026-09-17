@@ -433,8 +433,8 @@ fn invalid_json_falls_back_to_text_when_auto_detected_by_path() {
     assert_eq!(redaction.format(), "text");
     assert_eq!(redaction.warnings().len(), 1);
     assert_eq!(
-        redaction.render(&redactify::Allow::none()).unwrap(),
-        b"not json at all REDACTION-1"
+        rendered(&redaction, &redactify::Allow::none()),
+        "not json at all REDACTION-1"
     );
 }
 

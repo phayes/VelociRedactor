@@ -1,4 +1,4 @@
-//! Numbering, allow lists, custom rules, and extension points.
+//! Redaction tokens, keys, allow lists, custom rules, and extension points.
 
 mod common;
 
@@ -8,10 +8,11 @@ use common::*;
 use redactify::detect::{Detection, Detector, LeafContext, Pack, RegexDetector, load_pack_dir};
 use redactify::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 use redactify::policy::ScanAll;
-use redactify::{Allow, FormatHint, Redactor, RedactorBuilder};
+use redactify::{Allow, DEFAULT_SALT, FormatHint, Redactor, RedactorBuilder, redaction_key};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
+/// Render with real tokens.
 fn render(redactor: &Redactor, input: &str, format: &str, allow: &Allow) -> String {
     let redaction = redactor
         .redact(input.as_bytes(), FormatHint::Name(format))
@@ -20,71 +21,141 @@ fn render(redactor: &Redactor, input: &str, format: &str, allow: &Allow) -> Stri
 }
 
 #[test]
-fn ids_follow_first_appearance_and_repeat_for_equal_values() {
+fn token_format() {
+    let redaction = redactor()
+        .redact(b"export DB_PASSWORD=hunter2", FormatHint::Name("text"))
+        .unwrap();
+    let finding = &redaction.findings()[0];
+    let key = blake3::hash(b"stripsecrethunter2").to_hex().to_string();
+    assert_eq!(finding.key, key);
+    assert_eq!(finding.len, 7);
+    assert_eq!(finding.detector, "credential-assignment");
+    assert_eq!(
+        String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
+        format!("export DB_PASSWORD=[REDACTION|credential-assignment|7|{key}]")
+    );
+}
+
+#[test]
+fn len_counts_bytes() {
+    let redactor = Redactor::builder()
+        .detector(RegexDetector::new("word", "café").unwrap())
+        .build();
+    let redaction = redactor
+        .redact("a café".as_bytes(), FormatHint::Name("text"))
+        .unwrap();
+    assert_eq!(redaction.findings()[0].len, 5);
+    assert!(redactor.redact_str("a café").contains("|word|5|"));
+}
+
+#[test]
+fn equal_values_share_a_key() {
     let input = format!("a DB_PASSWORD=hunter2 b {S} c DB_PASSWORD=hunter2 d {S}");
     let redaction = redactor()
         .redact(input.as_bytes(), FormatHint::Name("text"))
         .unwrap();
     let findings = redaction.findings();
     assert_eq!(findings.len(), 2);
+    assert_eq!(findings[0].secret, "hunter2");
+    assert_eq!(findings[1].secret, S);
     assert_eq!(
-        (findings[0].id, findings[0].secret.as_str()),
-        (1, "hunter2")
+        findings[0].key,
+        redaction_key(DEFAULT_SALT.as_bytes(), "hunter2")
     );
-    assert_eq!((findings[1].id, findings[1].secret.as_str()), (2, S));
+    assert_eq!(findings[1].key, redaction_key(DEFAULT_SALT.as_bytes(), S));
     assert_eq!(findings[0].occurrences, 2);
+    assert_eq!(findings[0].offsets, [14, 84]);
     assert_eq!(
-        String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
+        rendered(&redaction, &Allow::none()),
         "a DB_PASSWORD=REDACTION-1 b REDACTION-2 c DB_PASSWORD=REDACTION-1 d REDACTION-2"
     );
 }
 
 #[test]
-fn allowing_one_id_leaves_the_others_unchanged() {
+fn allow_by_key_and_by_value() {
     let input = format!(
         "one DB_PASSWORD=hunter2\ntwo {S}\nthree postgres://app:pwd123@db.example.com/app\n"
     );
-    let all = render(redactor(), &input, "text", &Allow::none());
+    let redaction = redactor()
+        .redact(input.as_bytes(), FormatHint::Name("text"))
+        .unwrap();
     assert_eq!(
-        all,
+        rendered(&redaction, &Allow::none()),
         "one DB_PASSWORD=REDACTION-1\ntwo REDACTION-2\nthree REDACTION-3\n"
     );
-    let allowed = render(redactor(), &input, "text", &Allow::ids([2]));
+
+    let second = redaction.findings()[1].key.clone();
     assert_eq!(
-        allowed,
-        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-3\n")
+        rendered(&redaction, &Allow::keys([&second])),
+        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-2\n")
     );
-    let everything = render(redactor(), &input, "text", &Allow::ids([1, 2, 3]));
-    assert_eq!(everything, input);
+    assert_eq!(
+        rendered(&redaction, &Allow::keys([redaction.findings()[1].token()])),
+        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-2\n")
+    );
+    assert_eq!(
+        rendered(&redaction, &Allow::values(["hunter2"])),
+        format!("one DB_PASSWORD=hunter2\ntwo REDACTION-1\nthree REDACTION-2\n")
+    );
+
+    let all = Allow::values(["hunter2"])
+        .with_keys(redaction.findings()[1..].iter().map(|f| f.key.clone()));
+    assert_eq!(rendered(&redaction, &all), input);
 }
 
 #[test]
-fn numbering_is_identical_across_runs() {
+fn keys_depend_only_on_salt_and_value() {
     let input = format!("{{\"a\":\"{S}\",\"b\":\"DB_PASSWORD=hunter2\",\"c\":\"{S}\"}}\n");
-    let ids = || {
-        redactor()
+    let keys = |redactor: &Redactor| {
+        redactor
             .redact(input.as_bytes(), FormatHint::Auto)
             .unwrap()
             .findings()
             .iter()
-            .map(|f| (f.id, f.secret.clone()))
+            .map(|f| f.key.clone())
             .collect::<Vec<_>>()
     };
-    assert_eq!(ids(), ids());
+    assert_eq!(keys(redactor()), keys(redactor()));
+
+    let salted = Redactor::builder().salt("team-salt").build();
+    let salted_keys = keys(&salted);
+    assert_eq!(
+        salted_keys,
+        keys(&Redactor::builder().salt("team-salt").build())
+    );
+    assert_ne!(salted_keys, keys(redactor()));
+    assert_eq!(salted_keys[1], redaction_key(b"team-salt", "hunter2"));
+
+    // A key only matches under the salt it was made with.
+    let default_key = keys(redactor())[1].clone();
+    let redaction = salted.redact(input.as_bytes(), FormatHint::Auto).unwrap();
+    assert!(rendered(&redaction, &Allow::keys([default_key])).contains("DB_PASSWORD=REDACTION-2"));
 }
 
 #[test]
 fn output_redacts_to_itself() {
     for (format, input) in [
-        ("text", format!("x {S} DB_PASSWORD=hunter2")),
-        ("json", format!(r#"{{"k":"{S}","db_password":"hunter2"}}"#)),
+        (
+            "text",
+            format!("x {S} DB_PASSWORD=hunter2 postgres://u:pw@h/db"),
+        ),
+        (
+            "json",
+            format!(r#"{{"k":"{S}","db_password":"hunter2","e":"a@b.co"}}"#),
+        ),
         ("yaml", format!("k: {S}\ndb_password: hunter2\n")),
+        ("dotenv", format!("API_KEY={S}\nDB_PASSWORD=hunter2\n")),
     ] {
-        let once = render(redactor(), &input, format, &Allow::none());
-        let redaction = redactor()
+        let redactor = Redactor::builder().pii(redactify::detect::Pii::ALL).build();
+        let once = render(&redactor, &input, format, &Allow::none());
+        let redaction = redactor
             .redact(once.as_bytes(), FormatHint::Name(format))
             .unwrap();
-        assert!(redaction.findings().is_empty(), "{format}: {once}");
+        assert!(
+            redaction.findings().is_empty(),
+            "{format}: {once}\n{:?}",
+            redaction.findings()
+        );
     }
 }
 
@@ -94,7 +165,7 @@ fn inline_custom_rules() {
         .detector(RegexDetector::new("acme", r"ACME_[A-Z0-9]{8}").unwrap())
         .build();
     assert_eq!(
-        redactor.redact_str("token ACME_AB12CD34 here"),
+        normalize(&redactor.redact_str("token ACME_AB12CD34 here")),
         "token REDACTION-1 here"
     );
     // Without the rule the low-entropy token is left alone.
@@ -146,7 +217,7 @@ fn scan_all_policy_scans_skipped_keys() {
     assert_eq!(default, input);
     let scan_all = Redactor::builder().policy(ScanAll).build();
     assert_eq!(
-        render(&scan_all, &input, "json", &Allow::none()),
+        normalize(&render(&scan_all, &input, "json", &Allow::none())),
         r#"{"session_id":"REDACTION-1"}"#
     );
 }
@@ -206,8 +277,8 @@ fn user_defined_format_and_detector() {
         .unwrap();
     assert_eq!(redaction.format(), "colon");
     assert_eq!(
-        redaction.render(&Allow::none()).unwrap(),
-        b"banana: REDACTION-1 split\nid: banana\n"
+        rendered(&redaction, &Allow::none()),
+        "banana: REDACTION-1 split\nid: banana\n"
     );
 }
 
@@ -218,8 +289,8 @@ fn locations_point_at_the_secret() {
         .redact(input.as_bytes(), FormatHint::Name("json"))
         .unwrap();
     let finding = &redaction.findings()[0];
-    assert_eq!(finding.key.as_deref(), Some("b"));
-    assert_eq!(redaction.line_col(finding.offset.unwrap()), (3, 16));
+    assert_eq!(finding.field.as_deref(), Some("b"));
+    assert_eq!(redaction.line_col(finding.offset().unwrap()), (3, 16));
 }
 
 #[cfg(feature = "parallel")]

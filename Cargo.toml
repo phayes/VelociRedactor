@@ -26,6 +26,7 @@ plist = ["dep:plist"]
 
 [dependencies]
 aho-corasick = "1"
+blake3 = "1"
 expr-lang = { version = "2.1", default-features = false, features = ["regex"] }
 flate2 = "1"
 indexmap = "2"
@@ -53,7 +54,7 @@ encoding_rs = { version = "0.8", optional = true }
 csv = { version = "1", optional = true }
 plist = { version = "1", optional = true }
 
-clap = { version = "4", features = ["derive"], optional = true }
+clap = { version = "4", features = ["derive", "env"], optional = true }
 anyhow = { version = "1", optional = true }
 
 [build-dependencies]
@@ -61,6 +62,7 @@ sha2 = "0.11"
 ureq = "3"
 
 [dev-dependencies]
+blake3 = "1"
 criterion = "0.8"
 hcl-edit = "0.9"
 plist = "1"
