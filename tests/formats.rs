@@ -309,6 +309,17 @@ fn dotenv() {
 }
 
 #[test]
+fn dotenv_hex_digest_on_api_key() {
+    let hex = "a40d4b59bf3532493688056bdd1a16a7";
+    check(
+        "dotenv",
+        &format!("API_KEY={hex}\n"),
+        "API_KEY=REDACTION-1\n",
+    );
+    check("dotenv", &format!("NOTE={hex}\n"), &format!("NOTE={hex}\n"));
+}
+
+#[test]
 fn dotenv_file_names() {
     let formats = redactor().formats();
     for name in [

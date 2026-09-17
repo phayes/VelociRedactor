@@ -95,6 +95,37 @@ fn detects_format_from_file_name() {
 }
 
 #[test]
+fn raw_skips_format_detection() {
+    let input = format!("token: {S}\nsession_id: {S}\n");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.yaml");
+    fs::write(&path, &input).unwrap();
+
+    let out = redact(&[path.to_str().unwrap(), "--raw"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "token: REDACTION-1\nsession_id: REDACTION-1\n"
+    );
+
+    let sniffed = format!(r#"{{"token":"{S}","session_id":"{S}"}}"#);
+    let out = redact(&["--raw"], &sniffed);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        r#"{"token":"REDACTION-1","session_id":"REDACTION-1"}"#
+    );
+
+    let out = list(&["--json", "--raw"], &sniffed);
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["format"], "text");
+
+    let out = redact(&["--raw", "-f", "json"], &sniffed);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("cannot be used with"));
+}
+
+#[test]
 fn allow_and_check() {
     let input = format!("a {S}\nb DB_PASSWORD=hunter2\n");
     let hunter = key("hunter2");

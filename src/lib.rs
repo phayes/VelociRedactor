@@ -9,7 +9,8 @@
 //!
 //! Structured formats (JSON, JSONL, YAML, TOML, XML, HCL, INI, dotenv, Java
 //! properties, CSV, binary plists) are parsed so that only values are
-//! redacted. Keys, comments, and formatting are preserved.
+//! redacted. Keys, comments, and formatting are preserved. [`FormatHint::Raw`]
+//! skips that parsing and treats the whole input as plain text.
 //!
 //! ```
 //! use stripsecret::{Allow, FormatHint, Redactor, redaction_key};

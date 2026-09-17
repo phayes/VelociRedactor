@@ -18,6 +18,12 @@ fn high_entropy_secret_is_redacted() {
 }
 
 #[test]
+fn hex_digest_in_free_text_is_not_redacted() {
+    let hex = "a40d4b59bf3532493688056bdd1a16a7";
+    assert_eq!(text(hex), hex);
+}
+
+#[test]
 fn low_entropy_known_formats_are_redacted() {
     assert!(shannon_entropy(b"AKIAYRWQG5EJLPZLBYNP") <= 4.5);
     assert_text_cases(&[

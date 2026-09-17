@@ -28,6 +28,36 @@ fn value_with_secret_is_redacted() {
 }
 
 #[test]
+fn hex_digest_is_redacted_under_sensitive_keys() {
+    let hex = "a40d4b59bf3532493688056bdd1a16a7";
+    assert_eq!(
+        json(&format!(r#"{{"api_key":"{hex}"}}"#)),
+        r#"{"api_key":"REDACTION-1"}"#
+    );
+    assert_eq!(
+        json(&format!(r#"{{"apiKey":"{hex}"}}"#)),
+        r#"{"apiKey":"REDACTION-1"}"#
+    );
+    assert_eq!(
+        json(&format!(r#"{{"note":"{hex}"}}"#)),
+        format!(r#"{{"note":"{hex}"}}"#)
+    );
+    assert_eq!(
+        json(&format!(r#"{{"foreign_key":"{hex}"}}"#)),
+        format!(r#"{{"foreign_key":"{hex}"}}"#)
+    );
+    assert_eq!(
+        json(r#"{"api_key":"production"}"#),
+        r#"{"api_key":"production"}"#
+    );
+    // Keys ending in `id` are skipped by the default policy.
+    assert_eq!(
+        json(&format!(r#"{{"secret_id":"{hex}"}}"#)),
+        format!(r#"{{"secret_id":"{hex}"}}"#)
+    );
+}
+
+#[test]
 fn top_level_arrays() {
     assert_eq!(
         json(&format!(r#"["{S}","normal text"]"#)),

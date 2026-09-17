@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use serde_json::json;
 use stripsecret::detect::{Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir};
 use stripsecret::{Allow, DEFAULT_SALT, Finding, FormatHint, Redaction, Redactor};
-use serde_json::json;
 
 /// Redact secrets and personal data from files.
 ///
@@ -77,6 +77,10 @@ struct InputArgs {
     /// Input format. Detected from the file name or content when omitted.
     #[arg(short, long, value_name = "NAME")]
     format: Option<String>,
+
+    /// Treat the input as plain text, skipping format detection.
+    #[arg(long, conflicts_with = "format")]
+    raw: bool,
 
     /// Salt mixed into redaction keys. Use the same salt on every run for
     /// keys to stay the same.
@@ -208,16 +212,17 @@ fn scan<'a>(
     args: &InputArgs,
     input: &'a [u8],
 ) -> Result<(Redaction<'a>, Allow)> {
-    let hint = match (&args.format, args.path()) {
-        (Some(name), _) => {
+    let hint = match (&args.format, args.raw, args.path()) {
+        (Some(name), _, _) => {
             if redactor.formats().get(name).is_none() {
                 let names: Vec<_> = redactor.formats().names().collect();
                 bail!("unknown format {name:?} (available: {})", names.join(", "));
             }
             FormatHint::Name(name)
         }
-        (None, Some(path)) => FormatHint::Path(path),
-        (None, None) => FormatHint::Auto,
+        (None, true, _) => FormatHint::Raw,
+        (None, false, Some(path)) => FormatHint::Path(path),
+        (None, false, None) => FormatHint::Auto,
     };
 
     for key in &args.allow_key {

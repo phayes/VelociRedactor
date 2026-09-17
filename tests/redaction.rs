@@ -146,7 +146,9 @@ fn output_redacts_to_itself() {
         ("yaml", format!("k: {S}\ndb_password: hunter2\n")),
         ("dotenv", format!("API_KEY={S}\nDB_PASSWORD=hunter2\n")),
     ] {
-        let redactor = Redactor::builder().pii(stripsecret::detect::Pii::ALL).build();
+        let redactor = Redactor::builder()
+            .pii(stripsecret::detect::Pii::ALL)
+            .build();
         let once = render(&redactor, &input, format, &Allow::none());
         let redaction = redactor
             .redact(once.as_bytes(), FormatHint::Name(format))
@@ -211,6 +213,18 @@ fn empty_builder_redacts_nothing() {
 }
 
 #[test]
+fn builder_threads_entropy_thresholds() {
+    let input = r#"{"api_key":"production"}"#;
+    assert_eq!(render(redactor(), input, "json", &Allow::none()), input);
+
+    let lowered = Redactor::builder().sensitive_threshold(3.0).build();
+    assert_eq!(
+        normalize(&render(&lowered, input, "json", &Allow::none())),
+        r#"{"api_key":"REDACTION-1"}"#
+    );
+}
+
+#[test]
 fn scan_all_policy_scans_skipped_keys() {
     let input = format!(r#"{{"session_id":"{S}"}}"#);
     let default = render(redactor(), &input, "json", &Allow::none());
@@ -219,6 +233,30 @@ fn scan_all_policy_scans_skipped_keys() {
     assert_eq!(
         normalize(&render(&scan_all, &input, "json", &Allow::none())),
         r#"{"session_id":"REDACTION-1"}"#
+    );
+}
+
+#[test]
+fn raw_skips_format_detection() {
+    let input = format!(r#"{{"token":"{S}","session_id":"{S}"}}"#);
+
+    let auto = redactor()
+        .redact(input.as_bytes(), FormatHint::Auto)
+        .unwrap();
+    assert_eq!(auto.format(), "json");
+    assert_eq!(
+        rendered(&auto, &Allow::none()),
+        format!(r#"{{"token":"REDACTION-1","session_id":"{S}"}}"#)
+    );
+
+    let raw = redactor()
+        .redact(input.as_bytes(), FormatHint::Raw)
+        .unwrap();
+    assert_eq!(raw.format(), "text");
+    assert!(raw.warnings().is_empty());
+    assert_eq!(
+        rendered(&raw, &Allow::none()),
+        r#"{"token":"REDACTION-1","session_id":"REDACTION-1"}"#
     );
 }
 

@@ -4,7 +4,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::Error;
-use crate::detect::{self, Detection, Detector, LeafContext, Pii, RulesetDetector};
+use crate::detect::{
+    self, Detection, Detector, EntropyDetector, LeafContext, Pii, RulesetDetector,
+};
 use crate::format::{
     Container, Edit, Format, FormatRegistry, Leaf, LeafVisitor, Replacement, apply_edits,
 };
@@ -19,6 +21,7 @@ use crate::render::{self, Allow, DEFAULT_SALT};
 pub struct RedactorBuilder {
     detectors: Vec<Box<dyn Detector>>,
     ruleset: Option<RulesetDetector>,
+    entropy: Option<EntropyDetector>,
     pii: Vec<Pii>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
@@ -36,6 +39,7 @@ impl RedactorBuilder {
         Self {
             detectors: Vec::new(),
             ruleset: None,
+            entropy: None,
             pii: Vec::new(),
             formats: FormatRegistry::text_only(),
             policy: Arc::new(DefaultPolicy),
@@ -48,11 +52,15 @@ impl RedactorBuilder {
     /// detection stays off; enable it with [`pii`](Self::pii).
     pub fn defaults(mut self) -> Self {
         for detector in detect::default_detectors() {
-            if detector.name() == "ruleset" {
-                self.ruleset
-                    .get_or_insert_with(|| RulesetDetector::default_rules().clone());
-            } else {
-                self.detectors.push(detector);
+            match detector.name() {
+                "ruleset" => {
+                    self.ruleset
+                        .get_or_insert_with(|| RulesetDetector::default_rules().clone());
+                }
+                "entropy" => {
+                    self.entropy.get_or_insert_with(EntropyDetector::default);
+                }
+                _ => self.detectors.push(detector),
             }
         }
         for format in crate::format::builtin() {
@@ -102,6 +110,28 @@ impl RedactorBuilder {
         self
     }
 
+    /// Set the entropy threshold for tokens that are not under a sensitive
+    /// key (default [`EntropyDetector::DEFAULT_THRESHOLD`]).
+    ///
+    /// Enables the entropy detector if it is not already present.
+    pub fn entropy_threshold(mut self, threshold: f64) -> Self {
+        self.entropy
+            .get_or_insert_with(EntropyDetector::default)
+            .threshold = threshold;
+        self
+    }
+
+    /// Set the entropy threshold for values under a sensitive key (default
+    /// [`EntropyDetector::SENSITIVE_THRESHOLD`]).
+    ///
+    /// Enables the entropy detector if it is not already present.
+    pub fn sensitive_threshold(mut self, threshold: f64) -> Self {
+        self.entropy
+            .get_or_insert_with(EntropyDetector::default)
+            .sensitive_threshold = threshold;
+        self
+    }
+
     /// Set the salt mixed into redaction keys (default
     /// [`DEFAULT_SALT`](crate::DEFAULT_SALT)).
     ///
@@ -115,6 +145,9 @@ impl RedactorBuilder {
 
     pub fn build(self) -> Redactor {
         let mut detectors = self.detectors;
+        if let Some(entropy) = self.entropy {
+            detectors.insert(0, Box::new(entropy));
+        }
         if let Some(ruleset) = self.ruleset {
             detectors.push(Box::new(ruleset));
         }
@@ -137,6 +170,8 @@ pub enum FormatHint<'a> {
     Name(&'a str),
     /// Choose by file name or extension, then by content, then plain text.
     Path(&'a Path),
+    /// Skip format detection and treat the input as plain text.
+    Raw,
 }
 
 /// Finds and redacts secrets. Build one with [`Redactor::builder`].
@@ -169,10 +204,7 @@ impl Redactor {
     /// Redact `input` as plain text, with every finding replaced.
     pub fn redact_str(&self, input: &str) -> String {
         let redaction = self
-            .redact(
-                input.as_bytes(),
-                FormatHint::Name(crate::format::Text::NAME),
-            )
+            .redact(input.as_bytes(), FormatHint::Raw)
             .expect("plain text always parses");
         let bytes = redaction
             .render(&Allow::none())
@@ -213,6 +245,7 @@ impl Redactor {
                     .unwrap_or_else(|| self.formats.text()),
                 false,
             ),
+            FormatHint::Raw => (self.formats.text(), true),
         };
 
         let mut warnings = Vec::new();
