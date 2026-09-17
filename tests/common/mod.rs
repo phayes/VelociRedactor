@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use std::collections::HashMap;
 
-use redactify::{Allow, FormatHint, Redaction, Redactor};
+use stripsecret::{Allow, FormatHint, Redaction, Redactor};
 
 /// A value whose Shannon entropy is above the default threshold.
 pub const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
@@ -21,8 +21,8 @@ pub fn normalize(output: &str) -> String {
     let mut numbers: HashMap<String, usize> = HashMap::new();
     let mut out = String::with_capacity(output.len());
     let mut prev = 0;
-    for range in redactify::find_tokens(output) {
-        let key = redactify::token_key(&output[range.clone()])
+    for range in stripsecret::find_tokens(output) {
+        let key = stripsecret::token_key(&output[range.clone()])
             .unwrap()
             .to_owned();
         let next = numbers.len() + 1;

@@ -1,10 +1,10 @@
-//! Extending redactify with a custom detector and a custom file format.
+//! Extending stripsecret with a custom detector and a custom file format.
 //!
 //! Run with `cargo run --example custom`.
 
-use redactify::detect::{Detection, Detector, LeafContext};
-use redactify::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
-use redactify::{Allow, FormatHint, Redactor};
+use stripsecret::detect::{Detection, Detector, LeafContext};
+use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+use stripsecret::{Allow, FormatHint, Redactor};
 
 /// Flags internal ticket numbers such as `TICKET-1234`.
 struct TicketDetector;

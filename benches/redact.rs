@@ -1,5 +1,5 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use redactify::{Allow, FormatHint, Redactor};
+use stripsecret::{Allow, FormatHint, Redactor};
 
 const SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 

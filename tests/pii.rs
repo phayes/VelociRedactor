@@ -1,10 +1,10 @@
 mod common;
 
 use common::*;
-use redactify::detect::{
+use stripsecret::detect::{
     AddressDetector, Detector, EmailDetector, LeafContext, PhoneDetector, Pii, RegexDetector,
 };
-use redactify::{Allow, FormatHint, Redactor};
+use stripsecret::{Allow, FormatHint, Redactor};
 
 fn matches(detector: &dyn Detector, s: &str) -> Vec<String> {
     let mut out = Vec::new();

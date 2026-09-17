@@ -7,14 +7,14 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 use common::normalize;
-use redactify::{DEFAULT_SALT, redaction_key};
+use stripsecret::{DEFAULT_SALT, redaction_key};
 
 const S: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
-fn redactify(args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_redactify"))
+fn stripsecret(args: &[&str], stdin: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_stripsecret"))
         .args(args)
-        .env_remove("REDACTIFY_SALT")
+        .env_remove("STRIPSECRET_SALT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -30,11 +30,11 @@ fn redactify(args: &[&str], stdin: &str) -> Output {
 }
 
 fn redact(args: &[&str], stdin: &str) -> Output {
-    redactify(&[&["redact"], args].concat(), stdin)
+    stripsecret(&[&["redact"], args].concat(), stdin)
 }
 
 fn list(args: &[&str], stdin: &str) -> Output {
-    redactify(&[&["list"], args].concat(), stdin)
+    stripsecret(&[&["list"], args].concat(), stdin)
 }
 
 fn raw_stdout(output: &Output) -> String {
@@ -72,8 +72,8 @@ fn salt_changes_keys() {
         format!("DB_PASSWORD=[REDACTION|credential-assignment|7|{team_key}]")
     );
 
-    let out = Command::new(env!("CARGO_BIN_EXE_redactify"))
-        .env("REDACTIFY_SALT", "team")
+    let out = Command::new(env!("CARGO_BIN_EXE_stripsecret"))
+        .env("STRIPSECRET_SALT", "team")
         .args(["redact", "--allow-key", &team_key])
         .stdin(Stdio::null())
         .output()
@@ -327,7 +327,7 @@ fn invalid_structured_input_falls_back_to_text() {
 
 #[test]
 fn list_formats() {
-    let out = redactify(&["formats"], "");
+    let out = stripsecret(&["formats"], "");
     let listing = raw_stdout(&out);
     for name in [
         "json", "jsonl", "yaml", "toml", "xml", "hcl", "ini", "dotenv", "csv",
@@ -341,8 +341,8 @@ fn list_formats() {
 
 #[test]
 fn subcommand_is_required() {
-    let out = redactify(&[], "");
+    let out = stripsecret(&[], "");
     assert!(!out.status.success());
-    let out = redactify(&["--allow-by-key", "x"], "");
+    let out = stripsecret(&["--allow-by-key", "x"], "");
     assert!(!out.status.success());
 }

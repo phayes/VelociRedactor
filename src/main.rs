@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use redactify::detect::{Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir};
-use redactify::{Allow, DEFAULT_SALT, Finding, FormatHint, Redaction, Redactor};
+use stripsecret::detect::{Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir};
+use stripsecret::{Allow, DEFAULT_SALT, Finding, FormatHint, Redaction, Redactor};
 use serde_json::json;
 
 /// Redact secrets and personal data from files.
@@ -80,7 +80,7 @@ struct InputArgs {
 
     /// Salt mixed into redaction keys. Use the same salt on every run for
     /// keys to stay the same.
-    #[arg(long, env = "REDACTIFY_SALT", default_value = DEFAULT_SALT, hide_env_values = true)]
+    #[arg(long, env = "STRIPSECRET_SALT", default_value = DEFAULT_SALT, hide_env_values = true)]
     salt: String,
 
     /// Leave the secret with this key unredacted (repeatable). A full
@@ -221,7 +221,7 @@ fn scan<'a>(
     };
 
     for key in &args.allow_key {
-        let key = redactify::token_key(key.trim()).unwrap_or(key.trim());
+        let key = stripsecret::token_key(key.trim()).unwrap_or(key.trim());
         if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
             bail!("--allow-key {key:?} is not a 64-digit hex key");
         }

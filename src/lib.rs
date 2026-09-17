@@ -12,7 +12,7 @@
 //! redacted. Keys, comments, and formatting are preserved.
 //!
 //! ```
-//! use redactify::{Allow, FormatHint, Redactor, redaction_key};
+//! use stripsecret::{Allow, FormatHint, Redactor, redaction_key};
 //!
 //! let redactor = Redactor::builder().salt("my-team").build();
 //! let input = br#"{"db_password": "hunter2", "note": "hello"}"#;

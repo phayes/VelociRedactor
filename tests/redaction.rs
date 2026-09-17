@@ -5,10 +5,10 @@ mod common;
 use std::fs;
 
 use common::*;
-use redactify::detect::{Detection, Detector, LeafContext, Pack, RegexDetector, load_pack_dir};
-use redactify::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
-use redactify::policy::ScanAll;
-use redactify::{Allow, DEFAULT_SALT, FormatHint, Redactor, RedactorBuilder, redaction_key};
+use stripsecret::detect::{Detection, Detector, LeafContext, Pack, RegexDetector, load_pack_dir};
+use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+use stripsecret::policy::ScanAll;
+use stripsecret::{Allow, DEFAULT_SALT, FormatHint, Redactor, RedactorBuilder, redaction_key};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
@@ -146,7 +146,7 @@ fn output_redacts_to_itself() {
         ("yaml", format!("k: {S}\ndb_password: hunter2\n")),
         ("dotenv", format!("API_KEY={S}\nDB_PASSWORD=hunter2\n")),
     ] {
-        let redactor = Redactor::builder().pii(redactify::detect::Pii::ALL).build();
+        let redactor = Redactor::builder().pii(stripsecret::detect::Pii::ALL).build();
         let once = render(&redactor, &input, format, &Allow::none());
         let redaction = redactor
             .redact(once.as_bytes(), FormatHint::Name(format))
