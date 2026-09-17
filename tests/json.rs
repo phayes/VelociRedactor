@@ -29,7 +29,7 @@ fn value_with_secret_is_redacted() {
 
 #[test]
 fn hex_digest_is_redacted_under_sensitive_keys() {
-    let hex = "a40d4b59bf3532493688056bdd1a16a7";
+    let hex = "b65cc3551e470d5abe2448d41429daa2";
     assert_eq!(
         json(&format!(r#"{{"api_key":"{hex}"}}"#)),
         r#"{"api_key":"REDACTION-1"}"#

@@ -310,7 +310,7 @@ fn dotenv() {
 
 #[test]
 fn dotenv_hex_digest_on_api_key() {
-    let hex = "a40d4b59bf3532493688056bdd1a16a7";
+    let hex = "b65cc3551e470d5abe2448d41429daa2";
     check(
         "dotenv",
         &format!("API_KEY={hex}\n"),

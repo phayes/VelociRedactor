@@ -6,7 +6,9 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
-use stripsecret::detect::{Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir};
+use stripsecret::detect::{
+    EntropyDetector, Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir,
+};
 use stripsecret::{Allow, DEFAULT_SALT, Finding, FormatHint, Redaction, Redactor};
 
 /// Redact secrets and personal data from files.
@@ -81,6 +83,14 @@ struct InputArgs {
     /// Treat the input as plain text, skipping format detection.
     #[arg(long, conflicts_with = "format")]
     raw: bool,
+
+    /// Entropy threshold in bits per byte. Tokens above this are redacted.
+    #[arg(long, value_name = "BITS", default_value_t = EntropyDetector::DEFAULT_THRESHOLD)]
+    entropy_threshold: f64,
+
+    /// Entropy threshold for values under a sensitive key (api_key, token, …).
+    #[arg(long, value_name = "BITS", default_value_t = EntropyDetector::SENSITIVE_THRESHOLD)]
+    sensitive_threshold: f64,
 
     /// Salt mixed into redaction keys. Use the same salt on every run for
     /// keys to stay the same.
@@ -251,6 +261,8 @@ fn scan<'a>(
 fn build_redactor(args: &InputArgs) -> Result<Redactor> {
     let mut builder = Redactor::builder()
         .salt(args.salt.as_bytes())
+        .entropy_threshold(args.entropy_threshold)
+        .sensitive_threshold(args.sensitive_threshold)
         .pii(args.pii.iter().copied());
 
     if let Some(path) = &args.ruleset {

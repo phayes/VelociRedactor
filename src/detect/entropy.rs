@@ -160,7 +160,7 @@ pub fn shannon_entropy(bytes: &[u8]) -> f64 {
 mod tests {
     use super::*;
 
-    const HEX: &str = "a40d4b59bf3532493688056bdd1a16a7";
+    const HEX: &str = "b65cc3551e470d5abe2448d41429daa2";
 
     fn detect(s: &str) -> Vec<&str> {
         detect_key(None, s)

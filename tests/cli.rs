@@ -272,6 +272,21 @@ fn explicit_format_and_pii() {
 }
 
 #[test]
+fn entropy_threshold_flags() {
+    let input = r#"{"api_key":"production"}"#;
+    let out = redact(&["-f", "json"], input);
+    assert_eq!(raw_stdout(&out), input);
+
+    let out = redact(&["-f", "json", "--sensitive-threshold", "3.0"], input);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), r#"{"api_key":"REDACTION-1"}"#);
+
+    let out = redact(&["--entropy-threshold", "3.0"], "production ");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "REDACTION-1 ");
+}
+
+#[test]
 fn custom_rules_and_packs() {
     let out = redact(&["--rule", "acme=ACME_[0-9]{4}"], "id ACME_1234\n");
     assert_eq!(

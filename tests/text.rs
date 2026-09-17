@@ -19,7 +19,7 @@ fn high_entropy_secret_is_redacted() {
 
 #[test]
 fn hex_digest_in_free_text_is_not_redacted() {
-    let hex = "a40d4b59bf3532493688056bdd1a16a7";
+    let hex = "b65cc3551e470d5abe2448d41429daa2";
     assert_eq!(text(hex), hex);
 }
 
