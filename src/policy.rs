@@ -27,7 +27,7 @@ pub trait LeafPolicy: Send + Sync {
 
 /// The `policy` section of a configuration.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     /// Key suffixes that are skipped, compared in lowercase.
     pub skip_key_suffixes: Vec<String>,
@@ -41,7 +41,7 @@ pub struct PolicyConfig {
 ///
 /// The field name and its value are both compared ignoring ASCII case.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct SkipObjectConfig {
     /// The field to look at.
     pub key: String,
@@ -53,7 +53,7 @@ pub struct SkipObjectConfig {
 
 /// The vocabulary that identifies an object as connection settings.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct CredentialContextConfig {
     pub host_keys: Vec<String>,
     pub user_keys: Vec<String>,
@@ -121,9 +121,9 @@ impl ConfigPolicy {
     pub fn new(config: &PolicyConfig) -> Result<Self, Error> {
         // An empty suffix or prefix matches every key, which would skip the
         // whole document without reporting anything.
-        check_no_empty(&config.skip_key_suffixes, "policy.skip-key-suffixes")?;
-        check_no_empty(&config.skip_keys, "policy.skip-keys")?;
-        check_no_empty(&config.skip_object.prefixes, "policy.skip-object.prefixes")?;
+        check_no_empty(&config.skip_key_suffixes, "policy.skip_key_suffixes")?;
+        check_no_empty(&config.skip_keys, "policy.skip_keys")?;
+        check_no_empty(&config.skip_object.prefixes, "policy.skip_object.prefixes")?;
 
         Ok(Self {
             inner: Arc::new(Compiled {

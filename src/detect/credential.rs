@@ -43,7 +43,7 @@ impl CredentialAssignmentDetector {
 
 impl Detector for CredentialAssignmentDetector {
     fn name(&self) -> &str {
-        "credential-assignment"
+        "credential_assignment"
     }
 
     fn detect(&self, value: &str, _ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
@@ -79,7 +79,7 @@ impl CredentialKeyDetector {
 
 impl Detector for CredentialKeyDetector {
     fn name(&self) -> &str {
-        "credential-key"
+        "credential_key"
     }
 
     fn detect(&self, value: &str, ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {

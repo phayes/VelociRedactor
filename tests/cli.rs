@@ -96,8 +96,8 @@ fn pii_config(dir: &Path) -> String {
 /// An extra detector entry, appended after the last one the file lists.
 fn extra_detector(entry: &str) -> (String, String) {
     (
-        "  - credential-key".to_owned(),
-        format!("  - credential-key\n\n{entry}"),
+        "  - credential_key".to_owned(),
+        format!("  - credential_key\n\n{entry}"),
     )
 }
 
@@ -277,7 +277,7 @@ fn entropy_thresholds_are_configuration() {
 
     let sensitive = write_config(
         dir.path(),
-        &[("sensitive-threshold: 3.5", "sensitive-threshold: 3.0")],
+        &[("sensitive_threshold: 3.5", "sensitive_threshold: 3.0")],
         "",
     );
     let out = redact(&["-f", "json", "--config", &sensitive], input);
@@ -559,13 +559,13 @@ fn a_detector_that_is_not_listed_does_not_run() {
     // A detector name the crate does not know is an error, not a no-op.
     let unknown = write_config(
         dir.path(),
-        &[("  - credentialed-uri", "  - credentialed-url")],
+        &[("  - credentialed_uri", "  - credentialed_url")],
         "",
     );
     let out = redact(&["--config", &unknown], &input);
     assert_eq!(out.status.code(), Some(2));
     assert!(
-        stderr(&out).contains("credentialed-url"),
+        stderr(&out).contains("credentialed_url"),
         "{}",
         stderr(&out)
     );
@@ -691,8 +691,8 @@ fn skipped_keys_are_configuration() {
         dir.path(),
         &[
             (
-                r#"skip-key-suffixes: ["signature", "id", "ids"]"#.to_owned(),
-                r#"skip-key-suffixes: ["signature"]"#.to_owned(),
+                r#"skip_key_suffixes: ["signature", "id", "ids"]"#.to_owned(),
+                r#"skip_key_suffixes: ["signature"]"#.to_owned(),
             ),
             extra_detector("  - path:\n      paths: [session_id]"),
         ],

@@ -31,7 +31,7 @@ fn token_format() {
     assert_eq!(finding.id, 1);
     assert_eq!(finding.token(), "REDACTION-1");
     assert_eq!(finding.len, 7);
-    assert_eq!(finding.detector, "credential-assignment");
+    assert_eq!(finding.detector, "credential_assignment");
     assert_eq!(
         String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
         "export DB_PASSWORD=REDACTION-1"

@@ -10,7 +10,7 @@ use crate::Error;
 
 /// The `entropy` detector's settings.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct EntropyConfig {
     pub threshold: f64,
     pub sensitive_threshold: f64,
@@ -60,20 +60,20 @@ impl EntropyDetector {
         for segment in &config.sensitive_segments {
             if segment.contains('_') || segment.is_empty() {
                 return Err(Error::Config(format!(
-                    "entropy.sensitive-segments: {segment:?} is not a single word, \
+                    "entropy.sensitive_segments: {segment:?} is not a single word, \
                      so it can never match a key segment"
                 )));
             }
         }
         if config.structural_keys.iter().any(String::is_empty) {
             return Err(Error::Config(
-                "entropy.structural-keys: an empty entry matches everything".into(),
+                "entropy.structural_keys: an empty entry matches everything".into(),
             ));
         }
         // `{0,}` and `{1,}` make the token pattern match at every position.
         if config.min_token_length < 2 {
             return Err(Error::Config(
-                "entropy.min-token-length must be at least 2".into(),
+                "entropy.min_token_length must be at least 2".into(),
             ));
         }
 
@@ -161,7 +161,7 @@ impl Detector for EntropyDetector {
 fn token_regex(min_length: usize) -> Result<Regex, Error> {
     Regex::new(&format!(r"[A-Za-z0-9+_=-]{{{min_length},}}")).map_err(|_| {
         Error::Config(format!(
-            "entropy.min-token-length: {min_length} does not make a valid pattern"
+            "entropy.min_token_length: {min_length} does not make a valid pattern"
         ))
     })
 }

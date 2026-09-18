@@ -71,7 +71,7 @@ pub static BETTERLEAKS_RULESET: LazyLock<RulesetDetector> =
 
 /// The `ruleset` detector's settings.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct RulesetConfig {
     /// Rulesets to load, in order. A later rule replaces an earlier one with
     /// the same id.

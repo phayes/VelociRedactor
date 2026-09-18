@@ -234,7 +234,7 @@ fn regex_entries_report_their_configured_label() {
 }
 
 /// The built-in configuration labels its own patterns, so a Supabase key is
-/// still reported as `provider-token` now that it is a `regex` entry.
+/// still reported as `provider_token` now that it is a `regex` entry.
 #[test]
 fn the_builtin_regex_patterns_keep_their_label() {
     let secret = format!("sb_secret_{}", "probe_20260710_7f91c2d8e4a6b3f0");
@@ -243,7 +243,7 @@ fn the_builtin_regex_patterns_keep_their_label() {
         .build()
         .redact(doc.as_bytes(), FormatHint::Name("json"))
         .expect("valid json");
-    assert_eq!(redaction.findings()[0].detector, "provider-token");
+    assert_eq!(redaction.findings()[0].detector, "provider_token");
 }
 
 /// One bundled rule can be switched off by id without switching off the

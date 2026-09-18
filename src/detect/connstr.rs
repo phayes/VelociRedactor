@@ -87,7 +87,7 @@ impl ConnectionStringDetector {
 
 impl Detector for ConnectionStringDetector {
     fn name(&self) -> &str {
-        "connection-string"
+        "connection_string"
     }
 
     fn detect(&self, value: &str, _ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {

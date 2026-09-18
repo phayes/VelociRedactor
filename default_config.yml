@@ -42,16 +42,16 @@ policy:
   # structural and high-entropy by nature, and redacting them breaks the
   # document: identifiers, UUIDs, hashes, and the thinking-block signatures in
   # LLM transcripts, which must survive intact for a transcript to replay.
-  skip-key-suffixes: ["signature", "id", "ids"]
+  skip_key_suffixes: ["signature", "id", "ids"]
 
   # Keys skipped by exact (lowercase) name. Kept separate from the suffixes
   # above on purpose: as a suffix, "path" would also skip "paths" and "xpath".
-  skip-keys: ["path", "filepath", "file_path", "cwd", "root", "dir", "directory"]
+  skip_keys: ["path", "filepath", "file_path", "cwd", "root", "dir", "directory"]
 
   # Objects carrying inline image or binary payloads, identified by a field
   # whose value starts with one of `prefixes` or equals one of `values`. The
   # field name and its value are both compared ignoring case.
-  skip-object:
+  skip_object:
     key: "type"
     prefixes: ["image"]
     values: ["base64"]
@@ -60,10 +60,10 @@ policy:
   # settings, which makes a bare `password` key inside it sensitive. Compared
   # after normalizing `-`, ` ` and `.` to `_`, so "Data Source" matches
   # "data_source".
-  credential-context:
-    host-keys:
+  credential_context:
+    host_keys:
       ["host", "hostname", "server", "addr", "address", "datasource", "data_source"]
-    user-keys: ["user", "username", "userid", "user_id", "uid"]
+    user_keys: ["user", "username", "userid", "user_id", "uid"]
 
 # ---------------------------------------------------------------------------
 # placeholder — values that look like credentials but are not.
@@ -71,8 +71,8 @@ policy:
 # Documentation samples, masks, and earlier redactions, which would otherwise
 # be reported as secrets over and over. Consulted by every detector that finds
 # a credential by its surroundings or by a vendor's pattern, and so can be
-# looking at a sample of one: ruleset, credentialed-uri, connection-string,
-# credential-assignment, credential-key.
+# looking at a sample of one: ruleset, credentialed_uri, connection_string,
+# credential_assignment, credential_key.
 #
 # The others do not consult it, and are not meant to: `entropy` judges the
 # value itself, where a placeholder scores too low to report anyway, and
@@ -103,15 +103,15 @@ placeholder:
 
   # A value that is a run of one of these characters is a mask (`****`,
   # `xxxx`). Written as one string, one character per mask character.
-  mask-characters: "*x.-"
+  mask_characters: "*x.-"
 
   # Shortest run that counts as a mask, so "x" alone is still a secret.
-  mask-min-length: 3
+  mask_min_length: 3
 
   # Shortest `<name>` placeholder that counts, so "<a>" is still a secret.
   # The interior must be lowercase words joined by `-` or `_`, which keeps
   # "<hunter2>" and "<RealPassword>" secret.
-  bracket-min-length: 5
+  bracket_min_length: 5
 
 # ---------------------------------------------------------------------------
 # detectors — what looks for secrets, in the order they are listed.
@@ -131,23 +131,23 @@ detectors:
 
       # Used instead when the value sits under a sensitive key. Below the
       # hex-alphabet ceiling of 4.0, so MD5/SHA-shaped digests still qualify.
-      sensitive-threshold: 3.5
+      sensitive_threshold: 3.5
 
       # Shortest run of token characters ([A-Za-z0-9+_=-]) considered at all.
       # `/` is not a token character, so a whole file path is not one token.
-      min-token-length: 10
+      min_token_length: 10
 
       # Key segments that mark a field as likely holding a secret. Matched as
       # whole segments after splitting camelCase and `_`, so "apiKey" is
       # sensitive but "keyboard" is not. Entries must be single lowercase
       # words.
-      sensitive-segments:
+      sensitive_segments:
         ["key", "secret", "token", "pass", "password", "passwd", "pwd"]
 
       # Key names that contain a sensitive segment but are structural rather
       # than credentials. Matched exactly or as an `_`-delimited suffix, so
       # "user_foreign_key" matches. These keep the ordinary threshold.
-      structural-keys:
+      structural_keys:
         - "foreign_key"
         - "primary_key"
         - "sort_key"
@@ -159,7 +159,7 @@ detectors:
 
       # Hex strings of exactly these lengths (MD5, SHA-1, SHA-256) are
       # redacted under a sensitive key whatever their entropy.
-      hex-digest-lengths: [32, 40, 64]
+      hex_digest_lengths: [32, 40, 64]
 
   # betterleaks/gitleaks rules: several hundred vendor-specific secret
   # formats. Findings are labelled `ruleset:<rule id>`.
@@ -174,11 +174,11 @@ detectors:
 
       # Comments marking a line as intentionally containing a secret. Matched
       # case-sensitively anywhere on the line.
-      allow-signatures: ["betterleaks:allow", "gitleaks:allow"]
+      allow_signatures: ["betterleaks:allow", "gitleaks:allow"]
 
       # Rules to switch off, by id. No separator, so `*` matches anything:
       # ["github-pat", "aws-*"].
-      exclude-rules: []
+      exclude_rules: []
 
   # Every match of a regular expression, reported under `label`. List `regex`
   # as many times as you like: each entry's patterns share its label, which is
@@ -191,7 +191,7 @@ detectors:
   # still found; the cost is that a long identifier merely starting with a
   # prefix is redacted too.
   - regex:
-      label: provider-token
+      label: provider_token
       patterns:
         # Supabase secret API key (bypasses row-level security).
         - 'sb_secret_[A-Za-z0-9_-]{20,}'
@@ -202,16 +202,16 @@ detectors:
 
   # URLs with a password in the userinfo (postgres://user:pass@host/db). The
   # whole URL is redacted, unless the password is a `placeholder` value.
-  - credentialed-uri
+  - credentialed_uri
 
   # JDBC URLs, libpq DSNs, and ADO.NET connection strings.
-  - connection-string
+  - connection_string
 
   # DB_PASSWORD=value assignments inside free text.
-  - credential-assignment
+  - credential_assignment
 
   # The whole value of a password field in structured data.
-  - credential-key
+  - credential_key
 
   ## Personal data. Off by default: these patterns are broad, and whether a
   ## name or an address is a secret depends on the document.
@@ -247,7 +247,7 @@ detectors:
   ##   db.*.password      the password of each immediate child of `db`
   ##   secrets.**         everything under `secrets`, and `secrets` itself
   ##
-  ## A key listed under `policy.skip-keys` or `skip-key-suffixes` above is
+  ## A key listed under `policy.skip_keys` or `skip_key_suffixes` above is
   ## never scanned, so listing it here does nothing: take it out of `policy`
   ## first.
   # - path:

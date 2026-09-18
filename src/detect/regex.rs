@@ -11,12 +11,12 @@ use crate::Error;
 ///
 /// ```yaml
 /// - regex:
-///     label: provider-token
+///     label: provider_token
 ///     patterns:
 ///       - 'sb_secret_[A-Za-z0-9_-]{20,}'
 /// ```
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct RegexConfig {
     /// What these patterns' findings are reported as.
     #[serde(default = "default_label")]

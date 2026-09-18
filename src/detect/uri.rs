@@ -40,7 +40,7 @@ impl CredentialedUriDetector {
 
 impl Detector for CredentialedUriDetector {
     fn name(&self) -> &str {
-        "credentialed-uri"
+        "credentialed_uri"
     }
 
     fn detect(&self, value: &str, _ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {

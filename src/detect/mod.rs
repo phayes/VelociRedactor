@@ -93,7 +93,7 @@ impl Detection {
 ///   - entropy:
 ///       threshold: 4.5
 ///       # ...
-///   - credentialed-uri
+///   - credentialed_uri
 /// ```
 #[derive(Debug, Clone)]
 pub enum DetectorConfig {
@@ -140,10 +140,10 @@ pub const DETECTOR_NAMES: &[&str] = &[
     "regex",
     "value",
     "path",
-    "credentialed-uri",
-    "connection-string",
-    "credential-assignment",
-    "credential-key",
+    "credentialed_uri",
+    "connection_string",
+    "credential_assignment",
+    "credential_key",
     "pii:email",
     "pii:phone",
     "pii:address",
@@ -182,10 +182,10 @@ impl<'de> serde::de::Visitor<'de> for DetectorVisitor {
 
     fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Self::Value, E> {
         match name {
-            "credentialed-uri" => Ok(DetectorConfig::CredentialedUri),
-            "connection-string" => Ok(DetectorConfig::ConnectionString),
-            "credential-assignment" => Ok(DetectorConfig::CredentialAssignment),
-            "credential-key" => Ok(DetectorConfig::CredentialKey),
+            "credentialed_uri" => Ok(DetectorConfig::CredentialedUri),
+            "connection_string" => Ok(DetectorConfig::ConnectionString),
+            "credential_assignment" => Ok(DetectorConfig::CredentialAssignment),
+            "credential_key" => Ok(DetectorConfig::CredentialKey),
             "pii:phone" => Ok(DetectorConfig::PiiPhone),
             "pii:address" => Ok(DetectorConfig::PiiAddress),
             name if CONFIGURED.contains(&name) => Err(E::custom(format!(
@@ -236,10 +236,10 @@ impl DetectorConfig {
             Self::Regex(_) => "regex",
             Self::Value(_) => "value",
             Self::Path(_) => "path",
-            Self::CredentialedUri => "credentialed-uri",
-            Self::ConnectionString => "connection-string",
-            Self::CredentialAssignment => "credential-assignment",
-            Self::CredentialKey => "credential-key",
+            Self::CredentialedUri => "credentialed_uri",
+            Self::ConnectionString => "connection_string",
+            Self::CredentialAssignment => "credential_assignment",
+            Self::CredentialKey => "credential_key",
             Self::PiiEmail(_) => "pii:email",
             Self::PiiPhone => "pii:phone",
             Self::PiiAddress => "pii:address",

@@ -6,7 +6,7 @@ use crate::Error;
 
 /// The `value` detector's settings.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct ValueConfig {
     /// Exact strings, redacted wherever they appear, even mid-sentence.
     pub values: Vec<String>,

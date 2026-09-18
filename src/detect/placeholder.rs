@@ -17,7 +17,7 @@ static BRACKETED_INTERIOR: LazyLock<Regex> =
 /// The `placeholder` section of a configuration: values that look like
 /// credentials but are not.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct PlaceholderConfig {
     /// Compared in lowercase, so entries must be lowercase.
     pub values: Vec<String>,

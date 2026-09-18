@@ -7,7 +7,7 @@ use super::{Detection, Detector, LeafContext};
 
 /// The `pii:email` detector's settings.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct EmailConfig {
     /// Addresses belonging to automation rather than to a person. Empty means
     /// every address found is redacted.

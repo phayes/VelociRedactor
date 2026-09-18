@@ -45,7 +45,7 @@ const DEFAULT_CONFIG: &str = include_str!("../default_config.yml");
 /// Everything velociredactor knows: what to scan, what looks for secrets in it,
 /// and the rules over the result.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Scan comments as well as values, in formats that have them.
     #[serde(default)]
@@ -217,10 +217,10 @@ mod tests {
                 "entropy",
                 "ruleset",
                 "regex",
-                "credentialed-uri",
-                "connection-string",
-                "credential-assignment",
-                "credential-key",
+                "credentialed_uri",
+                "connection_string",
+                "credential_assignment",
+                "credential_key",
             ],
             "personal data stays off by default"
         );
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn an_unknown_detector_is_rejected() {
-        let err = Config::from_yaml(&edited("  - credentialed-uri", "  - pii:ssn"))
+        let err = Config::from_yaml(&edited("  - credentialed_uri", "  - pii:ssn"))
             .unwrap_err()
             .to_string();
         assert!(err.contains("pii:ssn"), "{err}");
