@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use url::Url;
 
-use super::placeholder::{has_real_value, unquote_range};
+use super::placeholder::{Placeholders, unquote_range};
 use super::{Detection, Detector, LeafContext};
 
 static JDBC: LazyLock<Regex> =
@@ -43,7 +43,7 @@ static PASSWORD_ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
 
 struct Rule {
     pattern: &'static LazyLock<Regex>,
-    has_secret: fn(&str) -> bool,
+    has_secret: fn(&str, &Placeholders) -> bool,
 }
 
 static RULES: [Rule; 4] = [
@@ -71,9 +71,19 @@ static RULES: [Rule; 4] = [
 ///
 /// The whole connection string is reported, since hosts and user names in the
 /// same string are often sensitive too. Strings whose password is a
-/// placeholder are ignored.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ConnectionStringDetector;
+/// placeholder are ignored, as decided by `placeholders`.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionStringDetector {
+    placeholders: Placeholders,
+}
+
+impl ConnectionStringDetector {
+    pub fn new(placeholders: &Placeholders) -> Self {
+        Self {
+            placeholders: placeholders.clone(),
+        }
+    }
+}
 
 impl Detector for ConnectionStringDetector {
     fn name(&self) -> &str {
@@ -88,7 +98,7 @@ impl Detector for ConnectionStringDetector {
             for m in rule.pattern.find_iter(value) {
                 let start = m.start();
                 let end = trim_trailing_punctuation(value, start, m.end());
-                if start < end && (rule.has_secret)(&value[start..end]) {
+                if start < end && (rule.has_secret)(&value[start..end], &self.placeholders) {
                     out.push(Detection::new(start..end, self.name()));
                 }
             }
@@ -110,14 +120,14 @@ fn trim_trailing_punctuation(s: &str, start: usize, mut end: usize) -> usize {
     end
 }
 
-fn jdbc_has_password(candidate: &str) -> bool {
+fn jdbc_has_password(candidate: &str, placeholders: &Placeholders) -> bool {
     candidate
         .get(..5)
         .is_some_and(|p| p.eq_ignore_ascii_case("jdbc:"))
-        && has_password_assignment(candidate)
+        && has_password_assignment(candidate, placeholders)
 }
 
-fn database_url_has_password(candidate: &str) -> bool {
+fn database_url_has_password(candidate: &str, placeholders: &Placeholders) -> bool {
     let Ok(url) = Url::parse(candidate) else {
         return false;
     };
@@ -126,26 +136,26 @@ fn database_url_has_password(candidate: &str) -> bool {
     }
     url.query_pairs().any(|(key, value)| {
         (key.eq_ignore_ascii_case("password") || key.eq_ignore_ascii_case("pwd"))
-            && has_real_value(&value)
+            && placeholders.has_real_value(&value)
     })
 }
 
-fn keyword_dsn_has_password(candidate: &str) -> bool {
+fn keyword_dsn_has_password(candidate: &str, placeholders: &Placeholders) -> bool {
     KEYWORD_HOST.is_match(candidate)
         && KEYWORD_USER.is_match(candidate)
-        && has_password_assignment(candidate)
+        && has_password_assignment(candidate, placeholders)
 }
 
-fn semicolon_conn_has_password(candidate: &str) -> bool {
+fn semicolon_conn_has_password(candidate: &str, placeholders: &Placeholders) -> bool {
     SEMICOLON_SERVER.is_match(candidate)
         && SEMICOLON_USER.is_match(candidate)
-        && has_password_assignment(candidate)
+        && has_password_assignment(candidate, placeholders)
 }
 
-fn has_password_assignment(candidate: &str) -> bool {
+fn has_password_assignment(candidate: &str, placeholders: &Placeholders) -> bool {
     PASSWORD_ASSIGNMENT.captures_iter(candidate).any(|caps| {
         let m = caps.get(1).expect("group 1 always participates");
         let range = unquote_range(candidate, m.range());
-        has_real_value(&candidate[range])
+        placeholders.has_real_value(&candidate[range])
     })
 }

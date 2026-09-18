@@ -199,11 +199,12 @@ impl<'a> Object<'a> {
         self.fields.iter().map(|(k, _)| *k)
     }
 
-    /// The string value of the first field named `key`.
+    /// The string value of the first field named `key`, ignoring ASCII case,
+    /// since a document may spell a key `type`, `Type`, or `TYPE`.
     pub fn get_str(&self, key: &str) -> Option<&'a str> {
         self.fields
             .iter()
-            .find(|(k, _)| *k == key)
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .and_then(|(_, v)| *v)
     }
 }
@@ -263,6 +264,35 @@ pub struct Edit {
     pub range: Range<usize>,
     pub text: String,
 }
+
+/// Every format name this crate knows, whether or not the Cargo feature that
+/// provides it is enabled in this build.
+///
+/// A configuration may name any of these. One that this build does not have
+/// is reported and skipped, so a configuration written for a full build still
+/// works against a smaller one; a name outside this list is an error.
+///
+/// The order is the one the built-in configuration lists, which is the order
+/// formats are tried in when guessing from content. `text` comes last because
+/// it is the fallback — though only by name: [`FormatRegistry::text`] finds it
+/// wherever it sits, and it is available even to a configuration that leaves
+/// it out.
+pub const ALL_NAMES: &[&str] = &[
+    "json",
+    "jsonl",
+    "yaml",
+    "toml",
+    "xml",
+    "hcl",
+    "ini",
+    "dotenv",
+    "properties",
+    "csv",
+    "tsv",
+    "psv",
+    "bplist",
+    "text",
+];
 
 /// The formats compiled into this build, in detection priority order.
 pub fn builtin() -> Vec<Arc<dyn Format>> {

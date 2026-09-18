@@ -1,7 +1,16 @@
 use aho_corasick::AhoCorasick;
+use serde::Deserialize;
 
 use super::{Detection, Detector, LeafContext};
 use crate::Error;
+
+/// The `value` detector's settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ValueConfig {
+    /// Exact strings, redacted wherever they appear, even mid-sentence.
+    pub values: Vec<String>,
+}
 
 /// Redacts every occurrence of a set of literal strings.
 ///

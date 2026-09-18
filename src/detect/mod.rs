@@ -4,18 +4,23 @@
 //! considers sensitive. Implement it and register it with
 //! [`RedactorBuilder::detector`](crate::RedactorBuilder::detector) to add
 //! your own detection logic.
+//!
+//! Which detectors run, and what each one is told, is configuration: the
+//! `detectors` list of a [`Config`](crate::config::Config) is a list of
+//! [`DetectorConfig`], and each entry names one of the detectors below.
 
 use std::ops::Range;
+use std::path::Path;
+
+use serde::Deserialize;
 
 mod connstr;
 mod credential;
-mod data;
 mod entropy;
 mod pack;
 mod path;
 mod pii;
 mod placeholder;
-mod provider;
 mod regex;
 mod ruleset;
 mod uri;
@@ -24,23 +29,19 @@ mod value;
 pub use connstr::ConnectionStringDetector;
 pub(crate) use credential::normalize_key as credential_key_normalize;
 pub use credential::{CredentialAssignmentDetector, CredentialKeyDetector};
-pub use data::{
-    CredentialContextConfig, DetectionData, EntropyConfig, PlaceholderConfig, PolicyConfig,
-    ProvidersConfig, SkipObjectConfig,
-};
-pub use entropy::{EntropyDetector, shannon_entropy};
+pub use entropy::{EntropyConfig, EntropyDetector, shannon_entropy};
 pub use pack::{
-    LoadedPacks, MAX_PACK_FILE_BYTES, MAX_PACK_FILES, Pack, PackRule, PackSample, load_pack_dir,
+    LoadedPacks, MAX_PACK_FILE_BYTES, MAX_PACK_FILES, Pack, PackRule, PackSample, RulePacksConfig,
+    load_pack_dir,
 };
-pub use path::PathDetector;
-pub use pii::{AddressDetector, EmailDetector, PhoneDetector, Pii};
-pub use placeholder::{Placeholders, is_placeholder};
-pub use provider::ProviderTokenDetector;
-pub use regex::RegexDetector;
+pub use path::{PathConfig, PathDetector};
+pub use pii::{AddressDetector, EmailConfig, EmailDetector, PhoneDetector};
+pub use placeholder::{PlaceholderConfig, Placeholders, is_placeholder};
 pub(crate) use regex::describe_regex_error;
-pub use ruleset::RulesetDetector;
+pub use regex::{RegexConfig, RegexDetector};
+pub use ruleset::{BETTERLEAKS_RULESET, RuleSource, RulesetConfig, RulesetDetector};
 pub use uri::CredentialedUriDetector;
-pub use value::ValueDetector;
+pub use value::{ValueConfig, ValueDetector};
 
 /// Finds sensitive ranges within a single value.
 pub trait Detector: Send + Sync {
@@ -86,21 +87,244 @@ impl Detection {
     }
 }
 
-/// The detectors enabled by default, using the built-in detection data:
-/// everything except PII and user rules.
-pub fn default_detectors() -> Vec<Box<dyn Detector>> {
-    detectors_from(DetectionData::builtin())
+/// One entry of a configuration's `detectors` list: which detector to run,
+/// and what to tell it.
+///
+/// In YAML a detector that takes settings is a single-key map and one that
+/// takes none is a bare name:
+///
+/// ```yaml
+/// detectors:
+///   - entropy:
+///       threshold: 4.5
+///       # ...
+///   - credentialed-uri
+/// ```
+#[derive(Debug, Clone)]
+pub enum DetectorConfig {
+    /// [`EntropyDetector`]
+    Entropy(EntropyConfig),
+    /// [`RulesetDetector`]
+    Ruleset(RulesetConfig),
+    /// A [`RegexDetector`] per pattern, all under one label.
+    Regex(RegexConfig),
+    /// [`ValueDetector`]
+    Value(ValueConfig),
+    /// [`PathDetector`]
+    Path(PathConfig),
+    /// [`CredentialedUriDetector`]
+    CredentialedUri,
+    /// [`ConnectionStringDetector`]
+    ConnectionString,
+    /// [`CredentialAssignmentDetector`]
+    CredentialAssignment,
+    /// [`CredentialKeyDetector`]
+    CredentialKey,
+    /// A [`RegexDetector`] per rule of each loaded [`Pack`].
+    RulePacks(RulePacksConfig),
+    /// [`EmailDetector`]
+    PiiEmail(EmailConfig),
+    /// [`PhoneDetector`]
+    PiiPhone,
+    /// [`AddressDetector`]
+    PiiAddress,
 }
 
-/// The same detectors, taking their vocabulary from `data`.
-pub fn detectors_from(data: &DetectionData) -> Vec<Box<dyn Detector>> {
-    vec![
-        Box::new(EntropyDetector::from_data(data)),
-        Box::new(RulesetDetector::default_rules().clone().with_data(data)),
-        Box::new(ProviderTokenDetector::new(data)),
-        Box::new(CredentialedUriDetector),
-        Box::new(ConnectionStringDetector),
-        Box::new(CredentialAssignmentDetector),
-        Box::new(CredentialKeyDetector),
-    ]
+/// Build a one-detector list, or an empty one when `skip`.
+fn boxed_unless(skip: bool, detector: impl Detector + 'static) -> Vec<Box<dyn Detector>> {
+    if skip {
+        Vec::new()
+    } else {
+        vec![Box::new(detector)]
+    }
+}
+
+/// Every detector name a configuration may use, in the order the built-in
+/// configuration lists them.
+pub const DETECTOR_NAMES: &[&str] = &[
+    "entropy",
+    "ruleset",
+    "regex",
+    "value",
+    "path",
+    "credentialed-uri",
+    "connection-string",
+    "credential-assignment",
+    "credential-key",
+    "rule-packs",
+    "pii:email",
+    "pii:phone",
+    "pii:address",
+];
+
+/// A detector entry is a bare name when it takes no settings, and a map of
+/// one name to its settings when it does.
+///
+/// Written by hand rather than derived because serde's own external tagging
+/// spells a variant as a YAML tag (`!entropy`), and because naming the
+/// detector in the error is worth far more here than the derive saves.
+impl<'de> Deserialize<'de> for DetectorConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(DetectorVisitor)
+    }
+}
+
+struct DetectorVisitor;
+
+/// The detectors that take settings, and so cannot be written as a bare name.
+const CONFIGURED: [&str; 7] = [
+    "entropy",
+    "ruleset",
+    "regex",
+    "value",
+    "path",
+    "rule-packs",
+    "pii:email",
+];
+
+fn unknown_detector<E: serde::de::Error>(name: &str) -> E {
+    E::custom(format!(
+        "unknown detector {name:?} (expected one of {})",
+        DETECTOR_NAMES.join(", ")
+    ))
+}
+
+impl<'de> serde::de::Visitor<'de> for DetectorVisitor {
+    type Value = DetectorConfig;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a detector name, or a map of one detector name to its settings")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Self::Value, E> {
+        match name {
+            "credentialed-uri" => Ok(DetectorConfig::CredentialedUri),
+            "connection-string" => Ok(DetectorConfig::ConnectionString),
+            "credential-assignment" => Ok(DetectorConfig::CredentialAssignment),
+            "credential-key" => Ok(DetectorConfig::CredentialKey),
+            "pii:phone" => Ok(DetectorConfig::PiiPhone),
+            "pii:address" => Ok(DetectorConfig::PiiAddress),
+            name if CONFIGURED.contains(&name) => Err(E::custom(format!(
+                "the {name} detector needs settings: write `{name}:` and indent them under it"
+            ))),
+            other => Err(unknown_detector(other)),
+        }
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        use serde::de::Error;
+
+        let Some(name) = map.next_key::<String>()? else {
+            return Err(A::Error::custom("an empty map names no detector"));
+        };
+        let detector = match name.as_str() {
+            "entropy" => DetectorConfig::Entropy(map.next_value()?),
+            "ruleset" => DetectorConfig::Ruleset(map.next_value()?),
+            "regex" => DetectorConfig::Regex(map.next_value()?),
+            "value" => DetectorConfig::Value(map.next_value()?),
+            "path" => DetectorConfig::Path(map.next_value()?),
+            "rule-packs" => DetectorConfig::RulePacks(map.next_value()?),
+            "pii:email" => DetectorConfig::PiiEmail(map.next_value()?),
+            // A detector that takes no settings, written `- name:` with
+            // nothing under it.
+            other => {
+                let detector = self.visit_str(other)?;
+                map.next_value::<serde::de::IgnoredAny>()?;
+                detector
+            }
+        };
+        if map.next_key::<String>()?.is_some() {
+            return Err(A::Error::custom(format!(
+                "{name}: each entry of `detectors` names one detector; \
+                 start the next one with its own `-`"
+            )));
+        }
+        Ok(detector)
+    }
+}
+
+impl DetectorConfig {
+    /// The name this entry is written under, which is also the name the
+    /// detectors it builds report themselves as.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Entropy(_) => "entropy",
+            Self::Ruleset(_) => "ruleset",
+            Self::Regex(_) => "regex",
+            Self::Value(_) => "value",
+            Self::Path(_) => "path",
+            Self::CredentialedUri => "credentialed-uri",
+            Self::ConnectionString => "connection-string",
+            Self::CredentialAssignment => "credential-assignment",
+            Self::CredentialKey => "credential-key",
+            Self::RulePacks(_) => "rule-packs",
+            Self::PiiEmail(_) => "pii:email",
+            Self::PiiPhone => "pii:phone",
+            Self::PiiAddress => "pii:address",
+        }
+    }
+
+    /// Build this entry's detectors.
+    ///
+    /// `placeholders` is the configuration's shared vocabulary of values that
+    /// look like credentials but are not. Loading a rule pack can raise
+    /// warnings without failing, which are appended to `warnings`.
+    pub fn detectors(
+        &self,
+        placeholders: &Placeholders,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<Box<dyn Detector>>, crate::Error> {
+        Ok(match self {
+            Self::Entropy(config) => vec![Box::new(EntropyDetector::new(config)?)],
+            Self::Ruleset(config) => vec![Box::new(RulesetDetector::new(config, placeholders)?)],
+            Self::Regex(config) => config
+                .detectors()?
+                .into_iter()
+                .map(|d| Box::new(d) as Box<dyn Detector>)
+                .collect(),
+            Self::Value(config) => {
+                let detector = ValueDetector::new(&config.values)?;
+                // An empty list would otherwise add a detector that can never
+                // match, and show up in reports as one that ran.
+                boxed_unless(detector.is_empty(), detector)
+            }
+            Self::Path(config) => {
+                let detector = PathDetector::new(&config.paths);
+                boxed_unless(detector.is_empty(), detector)
+            }
+            Self::CredentialedUri => vec![Box::new(CredentialedUriDetector)],
+            Self::ConnectionString => vec![Box::new(ConnectionStringDetector::new(placeholders))],
+            Self::CredentialAssignment => {
+                vec![Box::new(CredentialAssignmentDetector::new(placeholders))]
+            }
+            Self::CredentialKey => vec![Box::new(CredentialKeyDetector::new(placeholders))],
+            Self::RulePacks(config) => config.detectors(warnings)?,
+            Self::PiiEmail(config) => vec![Box::new(EmailDetector::new(config))],
+            Self::PiiPhone => vec![Box::new(PhoneDetector)],
+            Self::PiiAddress => vec![Box::new(AddressDetector)],
+        })
+    }
+
+    /// Resolve the file paths this entry names against `base`.
+    pub fn resolve_paths(&mut self, base: &Path) {
+        match self {
+            Self::Ruleset(config) => {
+                for source in &mut config.rules {
+                    if let RuleSource::Path(path) = source
+                        && path.is_relative()
+                    {
+                        *path = base.join(&*path);
+                    }
+                }
+            }
+            Self::RulePacks(config) => {
+                for path in &mut config.paths {
+                    if path.is_relative() {
+                        *path = base.join(&*path);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }

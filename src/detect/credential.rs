@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::placeholder::{has_real_value, unquote_range};
+use super::placeholder::{Placeholders, unquote_range};
 use super::{Detection, Detector, LeafContext};
 
 /// A database-flavoured password key: a vendor prefix, optional `_word` or
@@ -26,8 +26,20 @@ static GENERIC_PASSWORD_KEY: LazyLock<Regex> =
 
 /// Detects `DB_PASSWORD=value` style assignments inside free text and reports
 /// the value.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CredentialAssignmentDetector;
+///
+/// Values that `placeholders` considers documentation are left alone.
+#[derive(Debug, Clone, Default)]
+pub struct CredentialAssignmentDetector {
+    placeholders: Placeholders,
+}
+
+impl CredentialAssignmentDetector {
+    pub fn new(placeholders: &Placeholders) -> Self {
+        Self {
+            placeholders: placeholders.clone(),
+        }
+    }
+}
 
 impl Detector for CredentialAssignmentDetector {
     fn name(&self) -> &str {
@@ -38,7 +50,7 @@ impl Detector for CredentialAssignmentDetector {
         for caps in ASSIGNMENT.captures_iter(value) {
             let m = caps.get(2).expect("group 2 always participates");
             let range = unquote_range(value, m.range());
-            if has_real_value(&value[range.clone()]) {
+            if self.placeholders.has_real_value(&value[range.clone()]) {
                 out.push(Detection::new(range, self.name()));
             }
         }
@@ -50,8 +62,20 @@ impl Detector for CredentialAssignmentDetector {
 /// Database password keys (`db_password`, `mysql.root.password`,
 /// `PG-PASSWORD`) always qualify. A bare `password`, `passwd`, or `pwd` key
 /// qualifies only inside an object that also has host and user keys.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CredentialKeyDetector;
+///
+/// Values that `placeholders` considers documentation are left alone.
+#[derive(Debug, Clone, Default)]
+pub struct CredentialKeyDetector {
+    placeholders: Placeholders,
+}
+
+impl CredentialKeyDetector {
+    pub fn new(placeholders: &Placeholders) -> Self {
+        Self {
+            placeholders: placeholders.clone(),
+        }
+    }
+}
 
 impl Detector for CredentialKeyDetector {
     fn name(&self) -> &str {
@@ -60,7 +84,8 @@ impl Detector for CredentialKeyDetector {
 
     fn detect(&self, value: &str, ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
         let Some(key) = ctx.key else { return };
-        if is_credential_key(key, ctx.credential_context) && has_real_value(value) {
+        if is_credential_key(key, ctx.credential_context) && self.placeholders.has_real_value(value)
+        {
             out.push(Detection::new(0..value.len(), self.name()));
         }
     }
@@ -89,7 +114,7 @@ mod tests {
 
     fn assignments(s: &str) -> Vec<&str> {
         let mut out = Vec::new();
-        CredentialAssignmentDetector.detect(s, &LeafContext::default(), &mut out);
+        CredentialAssignmentDetector::default().detect(s, &LeafContext::default(), &mut out);
         out.iter().map(|d| &s[d.range.clone()]).collect()
     }
 
@@ -100,7 +125,7 @@ mod tests {
             credential_context,
             ..LeafContext::default()
         };
-        CredentialKeyDetector.detect(value, &ctx, &mut out);
+        CredentialKeyDetector::default().detect(value, &ctx, &mut out);
         !out.is_empty()
     }
 

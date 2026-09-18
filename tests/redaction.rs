@@ -5,7 +5,11 @@ mod common;
 use std::fs;
 
 use common::*;
-use stripsecret::detect::{Detection, Detector, LeafContext, Pack, RegexDetector, load_pack_dir};
+use stripsecret::config::Config;
+use stripsecret::detect::{
+    AddressDetector, Detection, Detector, DetectorConfig, EmailDetector, LeafContext, Pack,
+    PhoneDetector, RegexDetector, load_pack_dir,
+};
 use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 use stripsecret::policy::ScanAll;
 use stripsecret::{Allow, FormatHint, Redactor, RedactorBuilder};
@@ -109,7 +113,9 @@ fn output_redacts_to_itself() {
         ("dotenv", format!("API_KEY={S}\nDB_PASSWORD=hunter2\n")),
     ] {
         let redactor = Redactor::builder()
-            .pii(stripsecret::detect::Pii::ALL)
+            .detector(EmailDetector::default())
+            .detector(PhoneDetector)
+            .detector(AddressDetector)
             .build();
         let once = render(&redactor, &input, format, &Allow::none());
         let redaction = redactor
@@ -174,12 +180,20 @@ fn empty_builder_redacts_nothing() {
     assert_eq!(redactor.redact_str(&input), input);
 }
 
+/// The thresholds live on the detector, so lowering one means building the
+/// detector with a lower one and adding it in place of the configured one.
 #[test]
-fn builder_threads_entropy_thresholds() {
+fn entropy_thresholds_live_on_the_detector() {
     let input = r#"{"api_key":"production"}"#;
     assert_eq!(render(redactor(), input, "json", &Allow::none()), input);
 
-    let lowered = Redactor::builder().sensitive_threshold(3.0).build();
+    let mut config = Config::builtin().clone();
+    for detector in &mut config.detectors {
+        if let DetectorConfig::Entropy(entropy) = detector {
+            entropy.sensitive_threshold = 3.0;
+        }
+    }
+    let lowered = config.redactor().expect("valid configuration").0;
     assert_eq!(
         render(&lowered, input, "json", &Allow::none()),
         r#"{"api_key":"REDACTION-1"}"#

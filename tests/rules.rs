@@ -3,7 +3,11 @@
 mod common;
 
 use common::HIGH_ENTROPY_SECRET as S;
-use stripsecret::detect::{RegexDetector, ValueDetector};
+use stripsecret::config::Config;
+use stripsecret::detect::{
+    BETTERLEAKS_RULESET, DetectorConfig, EmailConfig, PathDetector, RegexConfig, RegexDetector,
+    RulesetDetector, ValueDetector,
+};
 use stripsecret::{Allow, Finding, FormatHint, Redaction, Redactor, RedactorBuilder};
 
 const DOC: &str = r#"{
@@ -27,6 +31,24 @@ fn redact(builder: RedactorBuilder, input: &str) -> String {
     render(&scan(builder, input), &Allow::none())
 }
 
+fn redact_with(redactor: &Redactor, input: &str) -> String {
+    let redaction = redactor
+        .redact(input.as_bytes(), FormatHint::Name("json"))
+        .expect("valid json");
+    render(&redaction, &Allow::none())
+}
+
+/// The built-in configuration keeping only `keep` among its detectors, plus
+/// the email detector, which it never lists.
+fn configured(keep: &[&str]) -> Redactor {
+    let mut config = Config::builtin().clone();
+    config.detectors.retain(|d| keep.contains(&d.name()));
+    config
+        .detectors
+        .push(DetectorConfig::PiiEmail(EmailConfig::default()));
+    config.redactor().expect("valid configuration").0
+}
+
 fn tokens_of<'a>(redaction: &'a Redaction<'_>, detector: &str) -> Vec<&'a Finding> {
     redaction
         .findings()
@@ -38,7 +60,7 @@ fn tokens_of<'a>(redaction: &'a Redaction<'_>, detector: &str) -> Vec<&'a Findin
 #[test]
 fn disallowed_paths_redact_whatever_the_value_holds() {
     let redaction = scan(
-        Redactor::builder().disallow_paths(["users.name", "users.ssn"]),
+        Redactor::builder().detector(PathDetector::new(["users.name", "users.ssn"])),
         DOC,
     );
     let out = render(&redaction, &Allow::none());
@@ -55,16 +77,22 @@ fn disallowed_paths_redact_whatever_the_value_holds() {
 
 #[test]
 fn path_globs_span_keys_and_segments() {
-    let out = redact(Redactor::builder().disallow_paths(["**.ssn"]), DOC);
+    let out = redact(
+        Redactor::builder().detector(PathDetector::new(["**.ssn"])),
+        DOC,
+    );
     assert!(out.contains(r#""ssn": "REDACTION-1""#), "{out}");
     assert!(out.contains(r#""name": "Jane Roe""#), "{out}");
 
-    let out = redact(Redactor::builder().disallow_paths(["db.*"]), DOC);
+    let out = redact(
+        Redactor::builder().detector(PathDetector::new(["db.*"])),
+        DOC,
+    );
     assert!(out.contains(r#""host": "REDACTION-1""#), "{out}");
     assert!(out.contains(r#""name": "Jane Roe""#), "{out}");
 
     // A single star stays inside one segment.
-    let out = redact(Redactor::builder().disallow_paths(["*"]), DOC);
+    let out = redact(Redactor::builder().detector(PathDetector::new(["*"])), DOC);
     assert!(out.contains(r#""name": "Jane Roe""#), "{out}");
 }
 
@@ -89,7 +117,7 @@ fn allowed_paths_are_never_scanned() {
     let out = redact(
         Redactor::builder()
             .allow_paths(["users"])
-            .disallow_paths(["users.**"]),
+            .detector(PathDetector::new(["users.**"])),
         DOC,
     );
     assert!(out.contains(r#""ssn": "123-45-6789""#), "{out}");
@@ -127,7 +155,7 @@ fn a_disallowed_value_is_redacted_wherever_it_appears() {
 fn allowing_wins_over_disallowing() {
     let redaction = scan(
         Redactor::builder()
-            .disallow_paths(["users.name"])
+            .detector(PathDetector::new(["users.name"]))
             .detector(ValueDetector::new(["123-45-6789"]).unwrap()),
         DOC,
     );
@@ -151,51 +179,119 @@ fn allowing_wins_over_disallowing() {
     );
 }
 
+/// Detection is exactly the `detectors` list: one that is not listed does not
+/// run, and there is no separate switch for turning one off.
 #[test]
-fn excluded_detectors_report_nothing() {
+fn only_the_configured_detectors_run() {
     let doc = format!(r#"{{"api_key": "{S}", "mail": "jane@corp.example"}}"#);
-    let with_pii = || Redactor::builder().pii([stripsecret::detect::Pii::Email]);
 
-    let out = redact(with_pii(), &doc);
-    assert_eq!(out, r#"{"api_key": "REDACTION-1", "mail": "REDACTION-2"}"#);
-
-    let out = redact(with_pii().exclude_detectors(["entropy"]), &doc);
+    let both = configured(&["entropy", "ruleset"]);
     assert_eq!(
-        out,
+        redact_with(&both, &doc),
+        r#"{"api_key": "REDACTION-1", "mail": "REDACTION-2"}"#
+    );
+
+    // Without entropy the key survives: no bundled rule knows its shape.
+    let no_entropy = configured(&["ruleset"]);
+    assert_eq!(
+        redact_with(&no_entropy, &doc),
         format!(r#"{{"api_key": "{S}", "mail": "REDACTION-1"}}"#)
     );
 
-    let out = redact(with_pii().exclude_detectors(["pii:*"]), &doc);
-    assert_eq!(
-        out,
-        r#"{"api_key": "REDACTION-1", "mail": "jane@corp.example"}"#
-    );
-
-    let out = redact(with_pii().exclude_detectors(["*"]), &doc);
-    assert_eq!(out, doc);
+    let mut none = Config::builtin().clone();
+    none.detectors.clear();
+    let none = none.redactor().expect("valid configuration").0;
+    assert_eq!(redact_with(&none, &doc), doc);
 }
 
+/// `regex` entries carry their own label, so unrelated groups of patterns
+/// stay apart in a listing instead of all reporting as `regex`.
 #[test]
-fn excluding_matches_the_reported_label_not_only_the_detector_name() {
+fn regex_entries_report_their_configured_label() {
+    let mut config = Config::builtin().clone();
+    config.detectors.push(DetectorConfig::Regex(RegexConfig {
+        label: "acme".to_owned(),
+        patterns: vec!["ACME-[0-9]{4}".to_owned()],
+    }));
+    config.detectors.push(DetectorConfig::Regex(RegexConfig {
+        patterns: vec!["ticket-[0-9]+".to_owned()],
+        ..RegexConfig::default()
+    }));
+    let redactor = config.redactor().expect("valid configuration").0;
+
+    let redaction = redactor
+        .redact(
+            br#"{"a": "ACME-1234", "b": "ticket-99"}"#,
+            FormatHint::Name("json"),
+        )
+        .expect("valid json");
+    let labels: Vec<&str> = redaction
+        .findings()
+        .iter()
+        .map(|f| f.detector.as_str())
+        .collect();
+    assert_eq!(labels, ["acme", "regex"], "the default label is `regex`");
+}
+
+/// The built-in configuration labels its own patterns, so a Supabase key is
+/// still reported as `provider-token` now that it is a `regex` entry.
+#[test]
+fn the_builtin_regex_patterns_keep_their_label() {
+    let secret = format!("sb_secret_{}", "probe_20260710_7f91c2d8e4a6b3f0");
+    let doc = format!(r#"{{"note": "{secret}"}}"#);
+    let redaction = Redactor::builder()
+        .build()
+        .redact(doc.as_bytes(), FormatHint::Name("json"))
+        .expect("valid json");
+    assert_eq!(redaction.findings()[0].detector, "provider-token");
+}
+
+/// One bundled rule can be switched off by id without switching off the
+/// ruleset around it.
+#[test]
+fn ruleset_rules_can_be_excluded_by_id() {
     let key = "ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2";
     let doc = format!(r#"{{"note": "{key}"}}"#);
 
-    let out = redact(Redactor::builder().exclude_detectors(["entropy"]), &doc);
+    let mut config = Config::builtin().clone();
+    config.detectors.retain(|d| d.name() == "ruleset");
+    let ruleset = config.redactor().expect("valid configuration").0;
+    assert_eq!(redact_with(&ruleset, &doc), r#"{"note": "REDACTION-1"}"#);
+
+    for detector in &mut config.detectors {
+        if let DetectorConfig::Ruleset(ruleset) = detector {
+            ruleset.exclude_rules = vec!["github-*".into()];
+        }
+    }
+    let excluded = config.redactor().expect("valid configuration").0;
+    assert_eq!(redact_with(&excluded, &doc), doc);
+}
+
+/// The same, through the Rust API, on the bundled ruleset itself.
+#[test]
+fn the_bundled_ruleset_is_a_detector_like_any_other() {
+    let key = "ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2";
+    let doc = format!(r#"{{"note": "{key}"}}"#);
+
+    let rules: RulesetDetector = BETTERLEAKS_RULESET.clone();
     assert_eq!(
-        out, r#"{"note": "REDACTION-1"}"#,
-        "the ruleset still finds it"
+        redact_with(&Redactor::builder().detector(rules.clone()).build(), &doc),
+        r#"{"note": "REDACTION-1"}"#
     );
 
-    let out = redact(
-        Redactor::builder().exclude_detectors(["entropy", "ruleset:github-pat"]),
-        &doc,
-    );
-    assert_eq!(out, doc);
+    let excluded = rules.exclude_rules(["github-pat"]);
+    let redactor = RedactorBuilder::new()
+        .shared_format(std::sync::Arc::new(stripsecret::format::Json))
+        .detector(excluded)
+        .build();
+    assert_eq!(redact_with(&redactor, &doc), doc);
 }
 
 #[test]
 fn plain_text_values_have_no_path() {
-    let redactor = Redactor::builder().disallow_paths(["**"]).build();
+    let redactor = Redactor::builder()
+        .detector(PathDetector::new(["**"]))
+        .build();
     let redaction = redactor
         .redact(b"just some words", FormatHint::Raw)
         .unwrap();

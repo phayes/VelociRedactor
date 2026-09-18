@@ -1,9 +1,16 @@
 //! The configuration: everything stripsecret knows, as data.
 //!
-//! A [`Config`] holds the detection data (which keys are skipped, which look
-//! sensitive, which values are placeholders) together with the rules layered
-//! on top (what to always redact, what to never redact). The one built into
-//! the binary is [`Config::builtin`].
+//! A [`Config`] says which values are looked at ([`policy`](Config::policy)),
+//! which of them are documentation rather than secrets
+//! ([`placeholder`](Config::placeholder)), which detectors run and what each
+//! one is told ([`detectors`](Config::detectors)), which input formats are
+//! recognized ([`formats`](Config::formats)), and what to spare whatever
+//! found it ([`allow`](Config::allow)). The one built into the binary is
+//! [`Config::builtin`].
+//!
+//! There is no matching `disallow` section: always redacting a value, a
+//! pattern, or a key path is what the `value`, `regex`, and `path` detectors
+//! do, so it is written in `detectors` like any other detection.
 //!
 //! A configuration read from a file **replaces** the built-in one. Nothing is
 //! merged and nothing is inherited, so the way to write one is to start from a
@@ -13,99 +20,60 @@
 //! stripsecret config > my-config.yml
 //! ```
 //!
-//! The detection sections are required for that reason: omitting one would
-//! otherwise mean an empty list, which weakens redaction without saying so.
+//! The sections that decide what is scanned are required for that reason:
+//! omitting one would otherwise mean an empty list, which weakens redaction
+//! without saying so.
 //!
-//! Relative paths in `ruleset.path` and `rules-packs` are resolved against the
-//! directory of the file they were read from, so a configuration can be moved
-//! around with the rules it names.
+//! Relative paths inside `detectors` — a `ruleset` file, a `rule-packs`
+//! directory — are resolved against the directory of the file they were read
+//! from, so a configuration can be moved around with the rules it names.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::detect::{
-    DetectionData, EntropyConfig, Pack, Pii, PlaceholderConfig, PolicyConfig, ProvidersConfig,
-    RegexDetector, RulesetDetector, ValueDetector, load_pack_dir,
-};
+use crate::detect::{DetectorConfig, PlaceholderConfig, Placeholders};
+use crate::format::{self, FormatRegistry};
+use crate::policy::{ConfigPolicy, PolicyConfig};
 use crate::{Allow, Error, Redactor, RedactorBuilder};
 
 /// The configuration built into this binary.
 const DEFAULT_CONFIG: &str = include_str!("../default_config.yml");
 
-/// Everything stripsecret knows: detection data plus the rules over it.
+/// Everything stripsecret knows: what to scan, what looks for secrets in it,
+/// and the rules over the result.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     /// Scan comments as well as values, in formats that have them.
     #[serde(default)]
     pub comments: bool,
+    /// Input formats to recognize, in detection priority order. Plain text is
+    /// always available whether or not it is listed.
+    pub formats: Vec<String>,
     /// Which values are scanned at all.
     pub policy: PolicyConfig,
-    /// Thresholds and key vocabulary for entropy detection.
-    pub entropy: EntropyConfig,
     /// Values that look like credentials but are not.
     pub placeholder: PlaceholderConfig,
-    /// Credentials identified by prefix and length alone.
-    pub providers: ProvidersConfig,
-    /// Personal data.
-    pub pii: PiiConfig,
-    /// The bundled ruleset and how to override it.
-    pub ruleset: RulesetConfig,
-    /// Switching detection off.
+    /// What looks for secrets, in the order listed.
+    pub detectors: Vec<DetectorConfig>,
+    /// What to leave unredacted. The last word over every detector.
     #[serde(default)]
-    pub detectors: DetectorsConfig,
-    /// Rule pack files, or directories of packs.
-    #[serde(default)]
-    pub rules_packs: Vec<PathBuf>,
-    /// What to leave unredacted. The last word over everything else.
-    #[serde(default)]
-    pub allow: Rules,
-    /// What to redact whatever it contains.
-    #[serde(default)]
-    pub disallow: Rules,
+    pub allow: AllowRules,
 }
 
-/// Personal data: which categories to redact, and which addresses are
-/// automation rather than people.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct PiiConfig {
-    #[serde(default)]
-    pub categories: Vec<Pii>,
-    pub email_allowlist: Vec<String>,
-}
-
-/// The betterleaks/gitleaks ruleset.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct RulesetConfig {
-    /// Comments marking a line as intentionally containing a secret.
-    pub allow_signatures: Vec<String>,
-    /// A ruleset to use instead of the bundled one.
-    #[serde(default)]
-    pub path: Option<PathBuf>,
-}
-
-/// Detectors to switch off.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
-pub struct DetectorsConfig {
-    /// Globs matching detector names or the labels they report.
-    pub exclude: Vec<String>,
-}
-
-/// Values, patterns, and key paths that a rule applies to.
+/// Values, patterns, and key paths that survive redaction.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Rules {
+pub struct AllowRules {
     /// Exact values.
     pub values: Vec<String>,
-    /// Regular expressions (Rust `regex` syntax).
+    /// Regular expressions a secret must match in full (Rust `regex` syntax).
     pub regexes: Vec<String>,
-    /// Key-path globs; see [`Glob::new`](crate::Glob::new).
+    /// Key-path globs never scanned at all; see
+    /// [`Glob::new`](crate::Glob::new).
     pub paths: Vec<String>,
 }
 
@@ -151,17 +119,11 @@ impl Config {
         serde_yaml_ng::from_str(source).map_err(|e| Error::Config(e.to_string()))
     }
 
-    /// Resolve the relative rule paths in this configuration against `base`.
+    /// Resolve the relative paths this configuration names against `base`.
     pub fn resolve_paths(&mut self, base: &Path) {
-        let resolve = |path: &PathBuf| {
-            if path.is_relative() {
-                base.join(path)
-            } else {
-                path.clone()
-            }
-        };
-        self.ruleset.path = self.ruleset.path.as_ref().map(&resolve);
-        self.rules_packs = self.rules_packs.iter().map(resolve).collect();
+        for detector in &mut self.detectors {
+            detector.resolve_paths(base);
+        }
     }
 
     /// The secrets this configuration leaves in place.
@@ -169,63 +131,61 @@ impl Config {
         Allow::values(self.allow.values.iter().cloned()).with_regexes(&self.allow.regexes)
     }
 
-    /// Build the redactor, along with any warnings raised while loading rule
-    /// packs.
+    /// Build the redactor this configuration describes, along with any
+    /// warnings raised while loading it.
     pub fn redactor(&self) -> Result<(Redactor, Vec<String>), Error> {
         let mut warnings = Vec::new();
-        let data = DetectionData::compile(self)?;
-
-        // From an empty builder, not `Redactor::builder()`, which would add a
-        // second copy of every built-in detector and keep the built-in
-        // vocabulary in the slots this one wants to fill.
-        let mut builder = RedactorBuilder::new()
-            .defaults_from(&data)
-            .pii(self.pii.categories.iter().copied())
-            .comments(self.comments)
-            .allow_paths(&self.allow.paths)
-            .disallow_paths(&self.disallow.paths)
-            .exclude_detectors(&self.detectors.exclude);
-
-        if let Some(path) = &self.ruleset.path {
-            builder = builder.ruleset(RulesetDetector::from_path(path)?.with_data(&data));
-        }
-        for pattern in &self.disallow.regexes {
-            builder = builder.detector(RegexDetector::new("regex", pattern)?);
-        }
-        let values = ValueDetector::new(&self.disallow.values)?;
-        if !values.is_empty() {
-            builder = builder.detector(values);
-        }
-        for path in &self.rules_packs {
-            for pack in load_packs(path, &mut warnings)? {
-                let (detectors, pack_warnings) = pack.detectors();
-                warnings.extend(pack_warnings);
-                for detector in detectors {
-                    builder = builder.detector(detector);
-                }
-            }
-        }
+        // From an empty builder, never `Redactor::builder()`, which would add
+        // a second copy of every detector the built-in configuration lists.
+        let builder = self.apply(RedactorBuilder::new(), &mut warnings)?;
         Ok((builder.build(), warnings))
     }
-}
 
-/// Load a pack file, or every pack in a directory.
-fn load_packs(path: &Path, warnings: &mut Vec<String>) -> Result<Vec<Pack>, Error> {
-    if path.is_dir() {
-        let loaded = load_pack_dir(path)?;
-        warnings.extend(loaded.warnings);
-        return Ok(loaded.packs);
+    /// Add everything this configuration describes to `builder`.
+    ///
+    /// Problems that do not prevent redacting — a format this build lacks, a
+    /// rule pack whose sample disagrees with its rule — are appended to
+    /// `warnings` instead of returned.
+    pub fn apply(
+        &self,
+        builder: RedactorBuilder,
+        warnings: &mut Vec<String>,
+    ) -> Result<RedactorBuilder, Error> {
+        let placeholders = Placeholders::new(&self.placeholder)?;
+        let mut builder = builder
+            .policy(ConfigPolicy::new(&self.policy)?)
+            .comments(self.comments)
+            .allow_paths(&self.allow.paths);
+
+        let available = FormatRegistry::default();
+        for name in &self.formats {
+            if !format::ALL_NAMES.contains(&name.as_str()) {
+                return Err(Error::UnknownFormat(name.clone()));
+            }
+            match available.get(name) {
+                Some(format) => builder = builder.shared_format(format),
+                None => warnings.push(format!(
+                    "format {name:?} is not compiled into this build; skipping it"
+                )),
+            }
+        }
+
+        for detector in &self.detectors {
+            for detector in detector.detectors(&placeholders, warnings)? {
+                builder = builder.boxed_detector(detector);
+            }
+        }
+        Ok(builder)
     }
-    let source = fs::read_to_string(path)
-        .map_err(|e| Error::Pack(format!("reading {}: {e}", path.display())))?;
-    Ok(vec![Pack::parse(&source, path)?])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::FormatHint;
+    use crate::detect::{PathConfig, RegexConfig};
 
+    #[cfg(feature = "json")]
     fn redact(config: &Config, input: &str) -> String {
         let (redactor, _) = config.redactor().unwrap();
         let redaction = redactor
@@ -238,22 +198,46 @@ mod tests {
     fn the_builtin_configuration_carries_no_rules() {
         let config = Config::builtin();
         assert!(!config.comments, "comments are off by default");
-        assert!(config.pii.categories.is_empty());
-        assert!(config.detectors.exclude.is_empty());
-        assert!(config.rules_packs.is_empty());
-        assert!(config.ruleset.path.is_none());
-        for rules in [&config.allow, &config.disallow] {
-            assert!(rules.values.is_empty());
-            assert!(rules.regexes.is_empty());
-            assert!(rules.paths.is_empty());
-        }
+        assert!(config.allow.values.is_empty());
+        assert!(config.allow.regexes.is_empty());
+        assert!(config.allow.paths.is_empty());
     }
 
+    /// The detectors the built-in configuration lists, which is what
+    /// `Redactor::builder()` produces.
+    #[test]
+    fn the_builtin_configuration_lists_the_documented_detectors() {
+        let names: Vec<_> = Config::builtin()
+            .detectors
+            .iter()
+            .map(DetectorConfig::name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "entropy",
+                "ruleset",
+                "regex",
+                "credentialed-uri",
+                "connection-string",
+                "credential-assignment",
+                "credential-key",
+            ],
+            "personal data stays off by default"
+        );
+    }
+
+    #[test]
+    fn the_builtin_configuration_lists_every_format() {
+        assert_eq!(Config::builtin().formats, format::ALL_NAMES);
+    }
+
+    #[cfg(feature = "json")]
     #[test]
     fn the_builtin_configuration_redacts_like_the_default_redactor() {
         let input = r#"{"api_key":"sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA","id":"x"}"#;
         let (redactor, warnings) = Config::builtin().redactor().unwrap();
-        assert!(warnings.is_empty());
+        assert!(warnings.is_empty(), "{warnings:?}");
 
         let with_config = redactor
             .redact(input.as_bytes(), FormatHint::Name("json"))
@@ -268,12 +252,18 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "json")]
     #[test]
-    fn rules_apply_on_top_of_the_builtin_detection_data() {
+    fn rules_apply_on_top_of_the_configured_detectors() {
         let mut config = Config::builtin().clone();
         config.allow.paths = vec!["build.**".into()];
-        config.disallow.paths = vec!["**.customer".into()];
-        config.disallow.regexes = vec!["ACME-[0-9]{4}".into()];
+        config.detectors.push(DetectorConfig::Path(PathConfig {
+            paths: vec!["**.customer".into()],
+        }));
+        config.detectors.push(DetectorConfig::Regex(RegexConfig {
+            patterns: vec!["ACME-[0-9]{4}".into()],
+            ..RegexConfig::default()
+        }));
 
         let out = redact(
             &config,
@@ -286,11 +276,11 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_detection_section_is_an_error() {
+    fn a_missing_section_is_an_error() {
         let err = Config::from_yaml("allow:\n  values: [x]\n")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("policy"), "{err}");
+        assert!(err.contains("formats"), "{err}");
 
         let err = Config::from_yaml("{}").unwrap_err().to_string();
         assert!(err.contains("missing field"), "{err}");
@@ -305,11 +295,45 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_pii_category_is_rejected() {
-        let err = Config::from_yaml(&edited("categories: []", "categories: [nope]"))
+    fn an_unknown_detector_is_rejected() {
+        let err = Config::from_yaml(&edited("  - credentialed-uri", "  - pii:ssn"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("unknown PII"), "{err}");
+        assert!(err.contains("pii:ssn"), "{err}");
+    }
+
+    /// A build made with fewer Cargo features still uses the built-in
+    /// configuration: a format it lacks is reported and skipped.
+    #[cfg(not(feature = "csv"))]
+    #[test]
+    fn a_format_this_build_lacks_is_a_warning_not_an_error() {
+        let (_, warnings) = Config::builtin()
+            .redactor()
+            .expect("the built-in configuration still loads");
+        assert!(warnings.iter().any(|w| w.contains("csv")), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_unknown_format_is_rejected() {
+        let mut config = Config::builtin().clone();
+        config.formats.push("jsn".into());
+        let err = config
+            .redactor()
+            .err()
+            .expect("a format stripsecret does not know is an error")
+            .to_string();
+        assert!(err.contains("jsn"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_builtin_ruleset_is_rejected() {
+        let err = Config::from_yaml(&edited(
+            "        - builtin:betterleaks",
+            "        - builtin:nope",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("nope"), "{err}");
     }
 
     /// The built-in configuration with one line swapped for another.

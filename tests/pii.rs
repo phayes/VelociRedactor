@@ -2,9 +2,10 @@ mod common;
 
 use common::*;
 use stripsecret::detect::{
-    AddressDetector, Detector, EmailDetector, LeafContext, PhoneDetector, Pii, RegexDetector,
+    AddressDetector, Detector, EmailConfig, EmailDetector, LeafContext, PhoneDetector,
+    RegexDetector,
 };
-use stripsecret::{Allow, FormatHint, Redactor};
+use stripsecret::{Allow, FormatHint, Redactor, RedactorBuilder};
 
 fn matches(detector: &dyn Detector, s: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -12,8 +13,42 @@ fn matches(detector: &dyn Detector, s: &str) -> Vec<String> {
     out.iter().map(|d| s[d.range.clone()].to_owned()).collect()
 }
 
-fn pii_redactor(categories: &[Pii]) -> Redactor {
-    Redactor::builder().pii(categories.iter().copied()).build()
+/// The built-in configuration plus the given personal-data detectors, which
+/// it leaves switched off.
+fn pii_redactor(detectors: impl IntoIterator<Item = Box<dyn Detector>>) -> Redactor {
+    detectors
+        .into_iter()
+        .fold(Redactor::builder(), RedactorBuilder::boxed_detector)
+        .build()
+}
+
+fn email() -> Box<dyn Detector> {
+    Box::new(EmailDetector::default())
+}
+
+fn phone() -> Box<dyn Detector> {
+    Box::new(PhoneDetector)
+}
+
+fn address() -> Box<dyn Detector> {
+    Box::new(AddressDetector)
+}
+
+/// An email detector carrying the allowlist that the commented-out
+/// `pii:email` entry of the built-in configuration documents.
+fn allowlisting_email_detector() -> EmailDetector {
+    EmailDetector::new(&EmailConfig {
+        allowlist: [
+            "noreply@",
+            "actions@",
+            "info@",
+            "@users.noreply.github.com",
+            "@noreply.github.com",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+    })
 }
 
 #[test]
@@ -101,7 +136,16 @@ fn detectors_report_their_category() {
 }
 
 #[test]
+fn a_detector_with_no_allowlist_reports_every_address() {
+    assert_eq!(
+        matches(&EmailDetector::default(), "from noreply@github.com to"),
+        ["noreply@github.com"]
+    );
+}
+
+#[test]
 fn allowlisted_emails_are_not_pii() {
+    let detector = allowlisting_email_detector();
     for email in [
         "noreply@github.com",
         "user@users.noreply.github.com",
@@ -111,38 +155,39 @@ fn allowlisted_emails_are_not_pii() {
         "Noreply@GitHub.com",
     ] {
         assert!(
-            matches(&EmailDetector::default(), &format!("from {email} to")).is_empty(),
+            matches(&detector, &format!("from {email} to")).is_empty(),
             "{email}"
         );
     }
     let git_log =
         "Author: Bot <noreply@github.com>\nCo-Authored-By: User <user@users.noreply.github.com>";
-    assert!(matches(&EmailDetector::default(), git_log).is_empty());
+    assert!(matches(&detector, git_log).is_empty());
 }
 
 #[test]
-fn categories_are_opt_in() {
+fn personal_data_detectors_are_opt_in() {
     let input = "contact user@example.com and call 555-123-4567";
-    assert_eq!(text(input), input);
+    assert_eq!(text(input), input, "the defaults redact no personal data");
 
-    let email_only = pii_redactor(&[Pii::Email]);
+    let email_only = pii_redactor([email()]);
     assert_eq!(
         email_only.redact_str(input),
         "contact REDACTION-1 and call 555-123-4567"
     );
 
-    let all = pii_redactor(&Pii::ALL);
+    let all = pii_redactor([email(), phone(), address()]);
     assert_eq!(
         all.redact_str("lives at 123 Main Street, call 555-123-4567"),
         "lives at REDACTION-1, call REDACTION-2"
     );
 }
 
+/// The names a configuration's `pii:` entries are written under.
 #[test]
-fn category_names_parse() {
-    assert_eq!("email".parse::<Pii>().unwrap(), Pii::Email);
-    assert_eq!(" Phone ".parse::<Pii>().unwrap(), Pii::Phone);
-    assert!("ssn".parse::<Pii>().is_err());
+fn detectors_report_the_names_the_configuration_uses() {
+    assert_eq!(EmailDetector::default().name(), "pii:email");
+    assert_eq!(PhoneDetector.name(), "pii:phone");
+    assert_eq!(AddressDetector.name(), "pii:address");
 }
 
 #[test]
@@ -160,14 +205,14 @@ fn custom_pii_patterns() {
 
 #[test]
 fn secrets_and_pii_coexist() {
-    let redactor = pii_redactor(&[Pii::Email]);
+    let redactor = pii_redactor([email()]);
     let got = redactor.redact_str(&format!("key={HIGH_ENTROPY_SECRET} user@example.com"));
     assert_eq!(got, "REDACTION-1 REDACTION-2");
 }
 
 #[test]
 fn file_paths_survive_with_pii_enabled() {
-    let redactor = pii_redactor(&[Pii::Email, Pii::Phone]);
+    let redactor = pii_redactor([email(), phone()]);
     for path in [
         "/tmp/TestE2E_Something3407889464/001/controller.go",
         "/private/var/folders/v4/31cd3cg52_sfrpb1mbtr7q7r0000gn/T/TestE2E_Something/controller",
@@ -183,7 +228,7 @@ fn file_paths_survive_with_pii_enabled() {
 
 #[test]
 fn skipped_json_fields_are_not_scanned_for_pii() {
-    let redactor = pii_redactor(&[Pii::Email]);
+    let redactor = pii_redactor([email()]);
     let input =
         br#"{"file_path":"user@example.com/project/file.go","content":"contact admin@test.org"}"#;
     let redaction = redactor.redact(input, FormatHint::Name("jsonl")).unwrap();

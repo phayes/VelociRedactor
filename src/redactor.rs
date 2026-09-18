@@ -4,15 +4,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::Error;
-use crate::detect::{
-    self, Detection, DetectionData, Detector, EntropyDetector, LeafContext, PathDetector, Pii,
-    RulesetDetector,
-};
+use crate::config::Config;
+use crate::detect::{Detection, Detector, LeafContext};
 use crate::format::{
     Container, Edit, Format, FormatRegistry, Leaf, LeafKind, LeafVisitor, Replacement, apply_edits,
 };
 use crate::glob::{Glob, any_match};
-use crate::policy::{ConfigPolicy, DefaultPolicy, LeafPolicy};
+use crate::policy::{DefaultPolicy, LeafPolicy};
 use crate::render::{self, Allow};
 
 /// Configures a [`Redactor`].
@@ -20,19 +18,25 @@ use crate::render::{self, Allow};
 /// [`RedactorBuilder::new`] starts empty: no detectors, only the plain-text
 /// format, and the [`DefaultPolicy`]. [`Redactor::builder`] starts from
 /// [`defaults`](RedactorBuilder::defaults).
+///
+/// Everything a detector knows is its own; the builder only collects them. To
+/// run a different set, add exactly the ones you want to an empty builder:
+///
+/// ```
+/// use stripsecret::RedactorBuilder;
+/// use stripsecret::detect::{BETTERLEAKS_RULESET, EmailDetector};
+///
+/// let redactor = RedactorBuilder::new()
+///     .detector(BETTERLEAKS_RULESET.clone())
+///     .detector(EmailDetector::default())
+///     .build();
+/// ```
 pub struct RedactorBuilder {
     detectors: Vec<Box<dyn Detector>>,
-    ruleset: Option<RulesetDetector>,
-    entropy: Option<EntropyDetector>,
-    pii: Vec<Pii>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
-    /// The detection vocabulary, kept for the detectors built in `build`.
-    data: DetectionData,
     comments: bool,
     allow_paths: Vec<Glob>,
-    disallow_paths: Vec<String>,
-    exclude: Vec<Glob>,
 }
 
 impl Default for RedactorBuilder {
@@ -45,46 +49,23 @@ impl RedactorBuilder {
     pub fn new() -> Self {
         Self {
             detectors: Vec::new(),
-            ruleset: None,
-            entropy: None,
-            pii: Vec::new(),
             formats: FormatRegistry::text_only(),
             policy: Arc::new(DefaultPolicy),
-            data: DetectionData::builtin().clone(),
             comments: false,
             allow_paths: Vec::new(),
-            disallow_paths: Vec::new(),
-            exclude: Vec::new(),
         }
     }
 
-    /// Add the built-in secret detectors (including the bundled ruleset), all
-    /// formats compiled into this build, and the default policy. PII
-    /// detection stays off; enable it with [`pii`](Self::pii).
+    /// Add everything the configuration built into the binary describes: its
+    /// detectors, the formats it lists that this build has, and its policy.
+    ///
+    /// Personal data detection is not among them; the `pii:` entries of the
+    /// built-in configuration are commented out.
     pub fn defaults(self) -> Self {
-        self.defaults_from(DetectionData::builtin())
-    }
-
-    /// The same, with the detection vocabulary taken from `data` instead of
-    /// the configuration built into the binary.
-    pub fn defaults_from(mut self, data: &DetectionData) -> Self {
-        // The entropy detector and the ruleset get their own slots, so that
-        // `entropy_threshold` and `ruleset` can replace them afterwards.
-        self.entropy
-            .get_or_insert_with(|| EntropyDetector::from_data(data));
-        self.ruleset
-            .get_or_insert_with(|| RulesetDetector::default_rules().clone().with_data(data));
-        self.detectors.extend(
-            detect::detectors_from(data)
-                .into_iter()
-                .filter(|d| !matches!(d.name(), "entropy" | "ruleset")),
-        );
-        for format in crate::format::builtin() {
-            self.formats.register(format);
-        }
-        self.policy = Arc::new(ConfigPolicy::new(data));
-        self.data = data.clone();
-        self
+        let mut warnings = Vec::new();
+        Config::builtin()
+            .apply(self, &mut warnings)
+            .expect("the built-in configuration is valid")
     }
 
     /// Add a detector.
@@ -99,25 +80,16 @@ impl RedactorBuilder {
         self
     }
 
-    /// Use `ruleset` instead of the bundled one.
-    pub fn ruleset(mut self, ruleset: RulesetDetector) -> Self {
-        self.ruleset = Some(ruleset);
-        self
-    }
-
-    /// Enable PII categories.
-    pub fn pii(mut self, categories: impl IntoIterator<Item = Pii>) -> Self {
-        for category in categories {
-            if !self.pii.contains(&category) {
-                self.pii.push(category);
-            }
-        }
-        self
-    }
-
     /// Add a format, replacing any registered format with the same name.
     pub fn format(mut self, format: impl Format + 'static) -> Self {
         self.formats.register(Arc::new(format));
+        self
+    }
+
+    /// Add a format behind an [`Arc`], replacing any registered format with
+    /// the same name.
+    pub fn shared_format(mut self, format: Arc<dyn Format>) -> Self {
+        self.formats.register(format);
         self
     }
 
@@ -146,73 +118,13 @@ impl RedactorBuilder {
         self
     }
 
-    /// Always redact values whose key path matches one of these globs,
-    /// whatever they contain. They are reported by the `path` detector.
-    pub fn disallow_paths(mut self, patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        self.disallow_paths
-            .extend(patterns.into_iter().map(|p| p.as_ref().to_owned()));
-        self
-    }
-
-    /// Ignore detectors whose name, or whose reported label, matches one of
-    /// these globs, such as `entropy`, `pii:*`, or `ruleset:aws-*`.
-    ///
-    /// The patterns have no separator; see [`Glob::flat`](crate::Glob::flat).
-    pub fn exclude_detectors(
-        mut self,
-        patterns: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Self {
-        self.exclude
-            .extend(patterns.into_iter().map(|p| Glob::flat(p.as_ref())));
-        self
-    }
-
-    /// Set the entropy threshold for tokens that are not under a sensitive
-    /// key (default [`EntropyDetector::DEFAULT_THRESHOLD`]).
-    ///
-    /// Enables the entropy detector if it is not already present.
-    pub fn entropy_threshold(mut self, threshold: f64) -> Self {
-        self.entropy
-            .get_or_insert_with(EntropyDetector::default)
-            .threshold = threshold;
-        self
-    }
-
-    /// Set the entropy threshold for values under a sensitive key (default
-    /// [`EntropyDetector::SENSITIVE_THRESHOLD`]).
-    ///
-    /// Enables the entropy detector if it is not already present.
-    pub fn sensitive_threshold(mut self, threshold: f64) -> Self {
-        self.entropy
-            .get_or_insert_with(EntropyDetector::default)
-            .sensitive_threshold = threshold;
-        self
-    }
-
     pub fn build(self) -> Redactor {
-        let mut detectors = self.detectors;
-        if let Some(entropy) = self.entropy {
-            detectors.insert(0, Box::new(entropy));
-        }
-        if let Some(ruleset) = self.ruleset {
-            detectors.push(Box::new(ruleset));
-        }
-        detectors.extend(
-            self.pii
-                .into_iter()
-                .map(|category| category.detector_from(&self.data)),
-        );
-        let paths = PathDetector::new(self.disallow_paths);
-        if !paths.is_empty() {
-            detectors.push(Box::new(paths));
-        }
         Redactor {
-            detectors: detectors.into(),
+            detectors: self.detectors.into(),
             formats: self.formats,
             policy: self.policy,
             comments: self.comments,
             allow_paths: self.allow_paths.into(),
-            exclude: self.exclude.into(),
         }
     }
 }
@@ -240,7 +152,6 @@ pub struct Redactor {
     policy: Arc<dyn LeafPolicy>,
     comments: bool,
     allow_paths: Arc<[Glob]>,
-    exclude: Arc<[Glob]>,
 }
 
 impl Default for Redactor {
@@ -346,13 +257,7 @@ impl Redactor {
             };
             let mut out = Vec::new();
             for detector in self.detectors.iter() {
-                if any_match(&self.exclude, detector.name()) {
-                    continue;
-                }
                 detector.detect(&leaf.value, &ctx, &mut out);
-            }
-            if !self.exclude.is_empty() {
-                out.retain(|d| !any_match(&self.exclude, &d.label));
             }
             render::merge(&leaf.value, out)
         };

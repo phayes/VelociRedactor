@@ -1,5 +1,16 @@
+use serde::Deserialize;
+
 use super::{Detection, Detector, LeafContext};
 use crate::glob::{Glob, any_match};
+
+/// The `path` detector's settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct PathConfig {
+    /// Key-path globs; see [`Glob::new`]. Every value at a matching path is
+    /// redacted whatever it holds.
+    pub paths: Vec<String>,
+}
 
 /// Redacts every value whose key path matches one of a set of globs,
 /// whatever the value contains.

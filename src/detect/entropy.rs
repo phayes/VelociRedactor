@@ -1,6 +1,34 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use regex::Regex;
+use serde::Deserialize;
+
 use super::credential::normalize_key;
-use super::data::DetectionData;
 use super::{Detection, Detector, LeafContext};
+use crate::Error;
+
+/// The `entropy` detector's settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct EntropyConfig {
+    pub threshold: f64,
+    pub sensitive_threshold: f64,
+    pub min_token_length: usize,
+    /// Single lowercase words marking a key as holding a secret.
+    pub sensitive_segments: Vec<String>,
+    /// Key names that merely look sensitive and keep the ordinary threshold.
+    pub structural_keys: Vec<String>,
+    pub hex_digest_lengths: Vec<usize>,
+}
+
+#[derive(Debug)]
+struct Compiled {
+    token: Regex,
+    sensitive_segments: HashSet<String>,
+    structural_keys: Vec<String>,
+    hex_digest_lengths: Vec<usize>,
+}
 
 /// Flags long alphanumeric tokens whose Shannon entropy exceeds a threshold.
 ///
@@ -20,33 +48,53 @@ pub struct EntropyDetector {
     /// field. Below the hex-alphabet ceiling of 4.0 so MD5/SHA-shaped values
     /// qualify.
     pub sensitive_threshold: f64,
-    /// The key vocabulary and token pattern to use.
-    data: DetectionData,
+    /// The key vocabulary and token pattern, shared between clones.
+    inner: Arc<Compiled>,
 }
 
 impl EntropyDetector {
-    pub const DEFAULT_THRESHOLD: f64 = 4.5;
-
-    /// Default [`sensitive_threshold`](Self::sensitive_threshold).
-    pub const SENSITIVE_THRESHOLD: f64 = 3.5;
-
-    /// A detector with the given thresholds and the built-in key vocabulary.
-    pub fn new(threshold: f64, sensitive_threshold: f64) -> Self {
-        Self {
-            threshold,
-            sensitive_threshold,
-            data: DetectionData::builtin().clone(),
+    /// Validate and compile `config`.
+    pub fn new(config: &EntropyConfig) -> Result<Self, Error> {
+        // Segments are compared against one `_`-delimited piece of a key, so
+        // an entry containing `_` could never match.
+        for segment in &config.sensitive_segments {
+            if segment.contains('_') || segment.is_empty() {
+                return Err(Error::Config(format!(
+                    "entropy.sensitive-segments: {segment:?} is not a single word, \
+                     so it can never match a key segment"
+                )));
+            }
         }
-    }
-
-    /// A detector taking its thresholds and vocabulary from `data`.
-    pub fn from_data(data: &DetectionData) -> Self {
-        let entropy = &data.get().entropy;
-        Self {
-            threshold: entropy.threshold,
-            sensitive_threshold: entropy.sensitive_threshold,
-            data: data.clone(),
+        if config.structural_keys.iter().any(String::is_empty) {
+            return Err(Error::Config(
+                "entropy.structural-keys: an empty entry matches everything".into(),
+            ));
         }
+        // `{0,}` and `{1,}` make the token pattern match at every position.
+        if config.min_token_length < 2 {
+            return Err(Error::Config(
+                "entropy.min-token-length must be at least 2".into(),
+            ));
+        }
+
+        Ok(Self {
+            threshold: config.threshold,
+            sensitive_threshold: config.sensitive_threshold,
+            inner: Arc::new(Compiled {
+                token: token_regex(config.min_token_length)?,
+                sensitive_segments: config
+                    .sensitive_segments
+                    .iter()
+                    .map(|s| s.to_lowercase())
+                    .collect(),
+                structural_keys: config
+                    .structural_keys
+                    .iter()
+                    .map(|s| s.to_lowercase())
+                    .collect(),
+                hex_digest_lengths: config.hex_digest_lengths.clone(),
+            }),
+        })
     }
 
     pub fn threshold(&self) -> f64 {
@@ -56,48 +104,15 @@ impl EntropyDetector {
     pub fn sensitive_threshold(&self) -> f64 {
         self.sensitive_threshold
     }
-}
 
-impl Default for EntropyDetector {
-    fn default() -> Self {
-        Self::new(Self::DEFAULT_THRESHOLD, Self::SENSITIVE_THRESHOLD)
-    }
-}
-
-impl Detector for EntropyDetector {
-    fn name(&self) -> &str {
-        "entropy"
-    }
-
-    fn detect(&self, value: &str, ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
-        let entropy = &self.data.get().entropy;
-        let sensitive = ctx.key.is_some_and(|key| self.is_sensitive_key(key));
-        let threshold = if sensitive {
-            self.sensitive_threshold
-        } else {
-            self.threshold
-        };
-        for m in entropy.token.find_iter(value) {
-            let token = m.as_str();
-            if shannon_entropy(token.as_bytes()) > threshold
-                || (sensitive && self.is_hex_digest(token))
-            {
-                out.push(Detection::new(m.range(), self.name()));
-            }
-        }
-    }
-}
-
-impl EntropyDetector {
     /// Whether `key` names a field that is likely to hold a secret.
     fn is_sensitive_key(&self, key: &str) -> bool {
-        let entropy = &self.data.get().entropy;
         // The camelCase split has to come first: normalizing lowercases the
         // key, after which `apiKey` is one segment instead of two.
         let normalized = normalize_key(&split_camel(key));
         // A structural key vetoes the segment scan below, where `public_key`
         // would otherwise match on `key`.
-        if entropy.structural_keys.iter().any(|name| {
+        if self.inner.structural_keys.iter().any(|name| {
             normalized == *name
                 || normalized
                     .strip_suffix(name)
@@ -108,18 +123,47 @@ impl EntropyDetector {
         // Whole segments, not substrings, so `keyboard` is not sensitive.
         normalized
             .split('_')
-            .any(|seg| entropy.sensitive_segments.contains(seg))
+            .any(|seg| self.inner.sensitive_segments.contains(seg))
     }
 
     /// An MD5, SHA-1, or SHA-256 hex digest, any case.
     fn is_hex_digest(&self, token: &str) -> bool {
-        self.data
-            .get()
-            .entropy
-            .hex_digest_lengths
-            .contains(&token.len())
+        self.inner.hex_digest_lengths.contains(&token.len())
             && token.bytes().all(|b| b.is_ascii_hexdigit())
     }
+}
+
+impl Detector for EntropyDetector {
+    fn name(&self) -> &str {
+        "entropy"
+    }
+
+    fn detect(&self, value: &str, ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
+        let sensitive = ctx.key.is_some_and(|key| self.is_sensitive_key(key));
+        let threshold = if sensitive {
+            self.sensitive_threshold
+        } else {
+            self.threshold
+        };
+        for m in self.inner.token.find_iter(value) {
+            let token = m.as_str();
+            if shannon_entropy(token.as_bytes()) > threshold
+                || (sensitive && self.is_hex_digest(token))
+            {
+                out.push(Detection::new(m.range(), self.name()));
+            }
+        }
+    }
+}
+
+/// The candidate-token pattern. `/` is excluded so a whole file path is not
+/// treated as one token; high-entropy segments are still found individually.
+fn token_regex(min_length: usize) -> Result<Regex, Error> {
+    Regex::new(&format!(r"[A-Za-z0-9+_=-]{{{min_length},}}")).map_err(|_| {
+        Error::Config(format!(
+            "entropy.min-token-length: {min_length} does not make a valid pattern"
+        ))
+    })
 }
 
 /// Insert `_` at camelCase boundaries so `apiKey` and `foreignKey` tokenize
@@ -163,12 +207,24 @@ pub fn shannon_entropy(bytes: &[u8]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detect::DetectorConfig;
 
     const HEX: &str = "b65cc3551e470d5abe2448d41429daa2";
 
-    /// A detector with the built-in vocabulary.
+    /// A detector with the vocabulary the built-in configuration gives it.
     fn d() -> EntropyDetector {
-        EntropyDetector::default()
+        EntropyDetector::new(&config()).unwrap()
+    }
+
+    fn config() -> EntropyConfig {
+        crate::config::Config::builtin()
+            .detectors
+            .iter()
+            .find_map(|d| match d {
+                DetectorConfig::Entropy(config) => Some(config.clone()),
+                _ => None,
+            })
+            .expect("the built-in configuration lists the entropy detector")
     }
 
     fn detect(s: &str) -> Vec<&str> {
@@ -181,7 +237,7 @@ mod tests {
             key,
             ..LeafContext::default()
         };
-        EntropyDetector::default().detect(s, &ctx, &mut out);
+        d().detect(s, &ctx, &mut out);
         out.iter().map(|d| &s[d.range.clone()]).collect()
     }
 
@@ -190,6 +246,13 @@ mod tests {
         assert_eq!(shannon_entropy(b""), 0.0);
         assert_eq!(shannon_entropy(b"aaaa"), 0.0);
         assert!((shannon_entropy(b"ab") - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_builtin_settings_are_the_documented_ones() {
+        assert_eq!(d().threshold(), 4.5);
+        assert_eq!(d().sensitive_threshold(), 3.5);
+        assert_eq!(d().inner.token.as_str(), r"[A-Za-z0-9+_=-]{10,}");
     }
 
     #[test]
@@ -279,9 +342,13 @@ mod tests {
         assert!(!d().is_hex_digest(&"g".repeat(32)));
     }
 
+    /// The thresholds are public fields, so a library user can raise them on
+    /// a detector built from any configuration.
     #[test]
     fn thresholds_are_fields() {
-        let detector = EntropyDetector::new(5.0, 2.0);
+        let mut detector = d();
+        detector.threshold = 5.0;
+        detector.sensitive_threshold = 2.0;
         assert_eq!(detector.threshold(), 5.0);
         assert_eq!(detector.sensitive_threshold(), 2.0);
 
@@ -297,11 +364,36 @@ mod tests {
         );
 
         out.clear();
+        detector.sensitive_threshold = 3.5;
         let ctx = LeafContext {
             key: Some("api_key"),
             ..LeafContext::default()
         };
-        EntropyDetector::new(5.0, 3.5).detect(HEX, &ctx, &mut out);
+        detector.detect(HEX, &ctx, &mut out);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn multi_word_sensitive_segments_are_rejected() {
+        let mut config = config();
+        config.sensitive_segments.push("api_key".into());
+        let err = EntropyDetector::new(&config).unwrap_err().to_string();
+        assert!(err.contains("single word"), "{err}");
+    }
+
+    #[test]
+    fn a_tiny_min_token_length_is_rejected() {
+        let mut config = config();
+        config.min_token_length = 1;
+        let err = EntropyDetector::new(&config).unwrap_err().to_string();
+        assert!(err.contains("at least 2"), "{err}");
+    }
+
+    #[test]
+    fn the_vocabulary_comes_from_the_configuration() {
+        let mut config = config();
+        config.structural_keys.retain(|k| k != "public_key");
+        let detector = EntropyDetector::new(&config).unwrap();
+        assert!(detector.is_sensitive_key("public_key"));
     }
 }

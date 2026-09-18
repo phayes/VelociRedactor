@@ -1,25 +1,47 @@
-# Everything stripsecret knows, as data.
+# stripsecret default configuration.
 #
-# This file is built into the binary. Passing --config FILE replaces it. 
-# To create your own config file, start from a copy of this one and modify it.
+# This file is built into the binary. Passing --config FILE replaces it
+# entirely: nothing is merged and nothing is inherited. To write your own,
+# start from a copy of this one:
+#
+#     stripsecret config > my-config.yml
 
 # Scan comments as well as values, in the formats that have them (JSON with
-# comments, YAML, TOML, HCL, INI, dotenv, XML, Java properties). 
+# comments, YAML, TOML, HCL, INI, dotenv, XML, Java properties).
 comments: false
 
 # ---------------------------------------------------------------------------
-# policy (required) — which values are looked at in the first place.
+# formats — the input formats to recognize, and the order they are tried in
+# when the format is guessed from content.
 #
-# Values skipped here are never scanned, so no rule below can redact them.
-# This is where to look if a `disallow.paths` entry appears to do nothing.
+# Passing --raw skips all formats and uses plain text instead.
+# ---------------------------------------------------------------------------
+formats:
+  - json
+  - jsonl
+  - yaml
+  - toml
+  - xml
+  - hcl
+  - ini
+  - dotenv
+  - properties
+  - csv
+  - tsv
+  - psv
+  - bplist
+  - text
+
+# ---------------------------------------------------------------------------
+# policy — which values are looked at in the first place.
+#
+# Values skipped here are never scanned, so no detector below can redact them.
 # ---------------------------------------------------------------------------
 policy:
-  # Keys ending in one of these are skipped, compared in lowercase. These are
+  # Keys ending in one of these are skipped, compared case-insensitve. These are
   # structural and high-entropy by nature, and redacting them breaks the
   # document: identifiers, UUIDs, hashes, and the thinking-block signatures in
   # LLM transcripts, which must survive intact for a transcript to replay.
-  #
-  # `ids` is NOT redundant with `id`: "toolUseIds" ends in "ds".
   skip-key-suffixes: ["signature", "id", "ids"]
 
   # Keys skipped by exact (lowercase) name. Kept separate from the suffixes
@@ -27,8 +49,8 @@ policy:
   skip-keys: ["path", "filepath", "file_path", "cwd", "root", "dir", "directory"]
 
   # Objects carrying inline image or binary payloads, identified by a field
-  # whose value starts with one of `prefixes` or equals one of `values`.
-  # Compared case-sensitively, as the document spells them.
+  # whose value starts with one of `prefixes` or equals one of `values`. The
+  # field name and its value are both compared ignoring case.
   skip-object:
     key: "type"
     prefixes: ["image"]
@@ -44,49 +66,12 @@ policy:
     user-keys: ["user", "username", "userid", "user_id", "uid"]
 
 # ---------------------------------------------------------------------------
-# entropy (required) — flags long tokens that look random.
-# ---------------------------------------------------------------------------
-entropy:
-  # Bits per byte required to redact a token. Ordinary words and identifiers
-  # fall below 4.5; API keys and tokens usually score above 5. Lower redacts
-  # more.
-  threshold: 4.5
-
-  # Used instead when the value sits under a sensitive key. Below the
-  # hex-alphabet ceiling of 4.0, so MD5/SHA-shaped digests still qualify.
-  sensitive-threshold: 3.5
-
-  # Shortest run of token characters ([A-Za-z0-9+_=-]) considered at all.
-  # `/` is not a token character, so a whole file path is not one token.
-  min-token-length: 10
-
-  # Key segments that mark a field as likely holding a secret. Matched as
-  # whole segments after splitting camelCase and `_`, so "apiKey" is
-  # sensitive but "keyboard" is not. Entries must be single lowercase words.
-  sensitive-segments: ["key", "secret", "token", "pass", "password", "passwd", "pwd"]
-
-  # Key names that contain a sensitive segment but are structural rather than
-  # credentials. Matched exactly or as an `_`-delimited suffix, so
-  # "user_foreign_key" matches. These keep the ordinary threshold.
-  structural-keys:
-    - "foreign_key"
-    - "primary_key"
-    - "sort_key"
-    - "partition_key"
-    - "lookup_key"
-    - "cache_key"
-    - "public_key"
-    - "idempotency_key"
-
-  # Hex strings of exactly these lengths (MD5, SHA-1, SHA-256) are redacted
-  # under a sensitive key whatever their entropy.
-  hex-digest-lengths: [32, 40, 64]
-
-# ---------------------------------------------------------------------------
-# placeholder (required) — values that look like credentials but are not.
+# placeholder — values that look like credentials but are not.
 #
-# Documentation samples and earlier redactions, which would otherwise be
-# reported as secrets over and over.
+# Documentation samples, masks, and earlier redactions, which would otherwise
+# be reported as secrets over and over. Shared by every detector that reports
+# a value because of the key or syntax around it rather than the value itself:
+# ruleset, connection-string, credential-assignment, credential-key.
 # ---------------------------------------------------------------------------
 placeholder:
   # Compared in lowercase after trimming whitespace and one layer of quotes,
@@ -124,86 +109,169 @@ placeholder:
   bracket-min-length: 5
 
 # ---------------------------------------------------------------------------
-# pii — personal data.
-# ---------------------------------------------------------------------------
-pii:
-  # Categories to redact: any of email, phone, address. Empty means personal
-  # data is not redacted at all.
-  categories: []
-
-  # Addresses belonging to automation rather than to a person (required).
-  # A leading `@` matches the domain suffix, a trailing `@` the local-part
-  # prefix, and anything else is an exact address.
-  email-allowlist:
-    - "noreply@"
-    - "actions@"
-    - "info@"
-    - "@users.noreply.github.com"
-    - "@noreply.github.com"
-
-# ---------------------------------------------------------------------------
-# providers (required) — credentials identified by prefix and length alone,
-# so they are caught whatever their entropy or surrounding key.
-# ---------------------------------------------------------------------------
-providers:
-  # Not anchored to a word boundary, so a key glued to a preceding identifier
-  # is still found; the cost is that a long identifier merely starting with a
-  # prefix is redacted too.
-  token-patterns:
-    # Supabase secret API key (bypasses row-level security).
-    - 'sb_secret_[A-Za-z0-9_-]{20,}'
-    # Supabase personal access token. Publishable keys (sb_publishable_…) are
-    # meant to be embedded in client code and are deliberately not matched.
-    - 'sbp_[a-z0-9_-]{20,}'
-
-# ---------------------------------------------------------------------------
-# ruleset — the bundled betterleaks/gitleaks rules.
-# ---------------------------------------------------------------------------
-ruleset:
-  # Comments marking a line as intentionally containing a secret. Matched
-  # case-sensitively anywhere on the line.
-  allow-signatures: ["betterleaks:allow", "gitleaks:allow"]
-
-  # A betterleaks/gitleaks ruleset to use instead of the bundled one.
-  # Relative to this file.
-  # path: rules.toml
-
-# ---------------------------------------------------------------------------
-# detectors — switching detection off.
+# detectors — what looks for secrets, in the order they are listed.
+#
+# Every detector that runs is listed here with its own settings; a detector
+# that is not listed does not run. Detectors that take no settings are written
+# as a bare name. The name of each is what `stripsecret list` reports in its
+# DETECTOR column.
 # ---------------------------------------------------------------------------
 detectors:
-  # Globs matching detector names, or the labels they report. No separator, so
-  # `*` matches anything: `entropy`, `pii:*`, `ruleset:aws-*`, `provider-token`.
-  exclude: []
+  # Long tokens that look random.
+  - entropy:
+      # Bits per byte required to redact a token. Ordinary words and
+      # identifiers fall below 4.5; API keys and tokens usually score above 5.
+      # Lower redacts more.
+      threshold: 4.5
 
-# Extra rule packs: a pack file, or a directory of them. Relative to this file.
-rules-packs: []
+      # Used instead when the value sits under a sensitive key. Below the
+      # hex-alphabet ceiling of 4.0, so MD5/SHA-shaped digests still qualify.
+      sensitive-threshold: 3.5
+
+      # Shortest run of token characters ([A-Za-z0-9+_=-]) considered at all.
+      # `/` is not a token character, so a whole file path is not one token.
+      min-token-length: 10
+
+      # Key segments that mark a field as likely holding a secret. Matched as
+      # whole segments after splitting camelCase and `_`, so "apiKey" is
+      # sensitive but "keyboard" is not. Entries must be single lowercase
+      # words.
+      sensitive-segments:
+        ["key", "secret", "token", "pass", "password", "passwd", "pwd"]
+
+      # Key names that contain a sensitive segment but are structural rather
+      # than credentials. Matched exactly or as an `_`-delimited suffix, so
+      # "user_foreign_key" matches. These keep the ordinary threshold.
+      structural-keys:
+        - "foreign_key"
+        - "primary_key"
+        - "sort_key"
+        - "partition_key"
+        - "lookup_key"
+        - "cache_key"
+        - "public_key"
+        - "idempotency_key"
+
+      # Hex strings of exactly these lengths (MD5, SHA-1, SHA-256) are
+      # redacted under a sensitive key whatever their entropy.
+      hex-digest-lengths: [32, 40, 64]
+
+  # betterleaks/gitleaks rules: several hundred vendor-specific secret
+  # formats. Findings are labelled `ruleset:<rule id>`.
+  - ruleset:
+      # Rulesets to load, in order; a later rule replaces an earlier one with
+      # the same id. `builtin:betterleaks` is the release vendored into this
+      # binary. Anything else is a path to a betterleaks/gitleaks TOML file,
+      # relative to this config file.
+      rules:
+        - builtin:betterleaks
+        # - ./my-rules.toml
+
+      # Comments marking a line as intentionally containing a secret. Matched
+      # case-sensitively anywhere on the line.
+      allow-signatures: ["betterleaks:allow", "gitleaks:allow"]
+
+      # Rules to switch off, by id. No separator, so `*` matches anything:
+      # ["github-pat", "aws-*"].
+      exclude-rules: []
+
+  # Every match of a regular expression, reported under `label`. List `regex`
+  # as many times as you like: each entry's patterns share its label, which is
+  # how a listing keeps unrelated groups apart. `label` may be left out, and
+  # is then `regex`.
+  #
+  # These patterns identify credentials by prefix and length alone, so they
+  # are caught whatever their entropy or surrounding key. They are not
+  # anchored to a word boundary, so a key glued to a preceding identifier is
+  # still found; the cost is that a long identifier merely starting with a
+  # prefix is redacted too.
+  - regex:
+      label: provider-token
+      patterns:
+        # Supabase secret API key (bypasses row-level security).
+        - 'sb_secret_[A-Za-z0-9_-]{20,}'
+        # Supabase personal access token. Publishable keys (sb_publishable_…)
+        # are meant to be embedded in client code and are deliberately not
+        # matched.
+        - 'sbp_[a-z0-9_-]{20,}'
+
+  # URLs with a password in the userinfo (postgres://user:pass@host/db).
+  - credentialed-uri
+
+  # JDBC URLs, libpq DSNs, and ADO.NET connection strings.
+  - connection-string
+
+  # DB_PASSWORD=value assignments inside free text.
+  - credential-assignment
+
+  # The whole value of a password field in structured data.
+  - credential-key
+
+  ## Personal data. Off by default: these patterns are broad, and whether a
+  ## name or an address is a secret depends on the document.
+  #
+  # - pii:email:
+  #     # Addresses belonging to automation rather than to a person. A
+  #     # leading `@` matches the domain suffix, a trailing `@` the
+  #     # local-part prefix, and anything else is an exact address.
+  #     allowlist:
+  #       - "noreply@"
+  #       - "actions@"
+  #       - "info@"
+  #       - "@users.noreply.github.com"
+  #       - "@noreply.github.com"
+  #
+  # - pii:phone
+  #
+  # - pii:address
+
+  ## Extra rule packs: a pack file, or a directory of them, relative to this
+  ## config file. See the crate docs for the pack format. Findings are
+  ## labelled `<pack name>.<rule id>`.
+  # - rule-packs:
+  #     paths:
+  #       - ./packs
+  
+  ## Exact strings, redacted wherever they appear, even mid-sentence. For
+  ## secrets you already know the text of.
+  # - value:
+  #     values:
+  #       - hunter2
+
+  ## Every value at a matching key path, redacted whatever it holds. A path is
+  ## the keys of the enclosing objects joined with `.`, ending in the value's
+  ## own key; array nesting adds nothing, so one entry covers every element. In
+  ## these globs `*` stays inside one key, `**` spans any number, `?` is one
+  ## character.
+  ##   users.ssn          the ssn of every element of `users`
+  ##   **.customer_name   a customer_name at any depth
+  ##   db.*.password      the password of each immediate child of `db`
+  ##   secrets.**         everything under `secrets`, and `secrets` itself
+  ##
+  ## A key listed under `policy.skip-keys` or `skip-key-suffixes` above is
+  ## never scanned, so listing it here does nothing: take it out of `policy`
+  ## first.
+  # - path:
+  #     paths:
+  #       - users.ssn
+
 
 # ---------------------------------------------------------------------------
-# Rules.
+# allow — what survives, whatever found it.
 #
-# A value allowed here stays in the document however it was found, including
-# by a `disallow` rule below.
+# Allowing is the last word: a value listed here stays in the document even
+# when a detector above reported it.
+#
+# There is no `disallow` to match it. Always redacting something is detection,
+# not an exception to it, so it is written as a `value`, `regex`, or `path`
+# detector above.
 # ---------------------------------------------------------------------------
 allow:
   # Exact values to leave in place, for confirmed false positives.
   values: []
   # Patterns a secret must match IN FULL to be left in place.
   regexes: []
-  # Key paths never scanned at all. Values here never become findings.
-  paths: []
-
-disallow:
-  # Exact strings, redacted wherever they appear, even mid-sentence.
-  values: []
-  # Regular expressions; every match is redacted.
-  regexes: []
-  # Key paths redacted whatever the value holds. A path is the keys of the
-  # enclosing objects joined with `.`, ending in the value's own key; array
-  # nesting adds nothing, so one entry covers every element. In these globs
-  # `*` stays inside one key, `**` spans any number, `?` is one character.
-  #   users.ssn          the ssn of every element of `users`
-  #   **.customer_name   a customer_name at any depth
-  #   db.*.password      the password of each immediate child of `db`
-  #   secrets.**         everything under `secrets`, and `secrets` itself
+  # Key paths never scanned at all. Unlike the two above, which spare a value
+  # after a detector reports it, these are never looked at, so they never
+  # become findings.
   paths: []

@@ -22,7 +22,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::Deserialize;
 
-use super::RegexDetector;
+use super::{Detector, RegexDetector};
 use crate::Error;
 
 const MAX_IDENTIFIER_LEN: usize = 64;
@@ -34,6 +34,48 @@ pub const MAX_PACK_FILES: usize = 256;
 /// Pack names and rule ids are restricted to characters that are safe in
 /// file names and log lines.
 static IDENTIFIER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+$").unwrap());
+
+/// The `rule-packs` detector's settings.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct RulePacksConfig {
+    /// Pack files, or directories to load every pack from.
+    pub paths: Vec<PathBuf>,
+}
+
+impl RulePacksConfig {
+    /// Load every pack named here and compile its rules.
+    ///
+    /// A rule that fails to compile, or a pack file that cannot be read, is
+    /// skipped with a warning rather than failing the whole load.
+    pub fn detectors(&self, warnings: &mut Vec<String>) -> Result<Vec<Box<dyn Detector>>, Error> {
+        let mut detectors: Vec<Box<dyn Detector>> = Vec::new();
+        for path in &self.paths {
+            for pack in load_packs(path, warnings)? {
+                let (pack_detectors, pack_warnings) = pack.detectors();
+                warnings.extend(pack_warnings);
+                detectors.extend(
+                    pack_detectors
+                        .into_iter()
+                        .map(|d| Box::new(d) as Box<dyn Detector>),
+                );
+            }
+        }
+        Ok(detectors)
+    }
+}
+
+/// Load a pack file, or every pack in a directory.
+fn load_packs(path: &Path, warnings: &mut Vec<String>) -> Result<Vec<Pack>, Error> {
+    if path.is_dir() {
+        let loaded = load_pack_dir(path)?;
+        warnings.extend(loaded.warnings);
+        return Ok(loaded.packs);
+    }
+    let source = fs::read_to_string(path)
+        .map_err(|err| Error::Pack(format!("reading {}: {err}", path.display())))?;
+    Ok(vec![Pack::parse(&source, path)?])
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

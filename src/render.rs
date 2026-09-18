@@ -31,8 +31,8 @@ pub fn find_tokens(s: &str) -> impl Iterator<Item = Range<usize>> + '_ {
 /// Secrets to leave in place, identified by exact value or by a pattern the
 /// whole value matches.
 ///
-/// An allowed value stays in the document even when a detector, an explicit
-/// disallowed value, or a disallowed path found it: allowing is the last word.
+/// An allowed value stays in the document whatever found it: allowing is the
+/// last word over every detector.
 #[derive(Debug, Clone, Default)]
 pub struct Allow {
     values: HashSet<String>,

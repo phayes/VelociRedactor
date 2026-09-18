@@ -17,7 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
@@ -29,11 +29,11 @@ use regex::Regex;
 use regex::bytes::Regex as BytesRegex;
 use serde::Deserialize;
 
-use super::data::DetectionData;
 use super::entropy::shannon_entropy;
 use super::placeholder::Placeholders;
 use super::{Detection, Detector, LeafContext};
 use crate::Error;
+use crate::glob::{Glob, any_match};
 
 /// The vendored betterleaks release; refresh it with
 /// `scripts/update-betterleaks.rs`.
@@ -50,17 +50,81 @@ fn default_toml() -> &'static str {
     std::str::from_utf8(vendored("betterleaks.toml")).expect("bundled ruleset is UTF-8")
 }
 
+/// The betterleaks ruleset vendored into this binary, ready to use.
+///
+/// Add it to a [`Redactor`](crate::Redactor) with
+/// [`RedactorBuilder::detector`](crate::RedactorBuilder::detector):
+///
+/// ```
+/// use stripsecret::RedactorBuilder;
+/// use stripsecret::detect::BETTERLEAKS_RULESET;
+///
+/// let redactor = RedactorBuilder::new()
+///     .detector(BETTERLEAKS_RULESET.clone())
+///     .build();
+/// ```
+///
+/// The rules behind it are shared, so cloning it is cheap and the 486 KB of
+/// TOML is parsed once per process.
+pub static BETTERLEAKS_RULESET: LazyLock<RulesetDetector> =
+    LazyLock::new(|| RulesetDetector::from_toml(default_toml()).expect("bundled ruleset is valid"));
+
+/// The `ruleset` detector's settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct RulesetConfig {
+    /// Rulesets to load, in order. A later rule replaces an earlier one with
+    /// the same id.
+    pub rules: Vec<RuleSource>,
+    /// Comments marking a line as intentionally containing a secret.
+    #[serde(default = "default_allow_signatures")]
+    pub allow_signatures: Vec<String>,
+    /// Globs matching the ids of rules to switch off.
+    #[serde(default)]
+    pub exclude_rules: Vec<String>,
+}
+
+fn default_allow_signatures() -> Vec<String> {
+    RulesetDetector::DEFAULT_ALLOW_SIGNATURES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
+}
+
+/// Where a ruleset's rules come from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleSource {
+    /// The betterleaks release vendored into this binary, written
+    /// `builtin:betterleaks`.
+    Betterleaks,
+    /// A betterleaks/gitleaks TOML file.
+    Path(PathBuf),
+}
+
+impl<'de> Deserialize<'de> for RuleSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let source = String::deserialize(deserializer)?;
+        match source.strip_prefix("builtin:") {
+            Some("betterleaks") => Ok(RuleSource::Betterleaks),
+            Some(other) => Err(serde::de::Error::custom(format!(
+                "unknown built-in ruleset {other:?} (expected builtin:betterleaks)"
+            ))),
+            None => Ok(RuleSource::Path(PathBuf::from(source))),
+        }
+    }
+}
+
 /// Detects secrets using a ruleset. Cloning is cheap.
 ///
 /// The rules themselves are shared; the vocabulary that decides which matches
-/// to discard (placeholders, allow-comment signatures) comes from the
-/// configuration and sits beside them, so replacing it does not re-parse the
-/// rules.
+/// to discard (placeholders, allow-comment signatures, excluded rule ids)
+/// sits beside them, so changing it does not re-parse the rules.
 #[derive(Clone)]
 pub struct RulesetDetector {
     inner: Arc<Ruleset>,
     placeholders: Placeholders,
     allow_signatures: Arc<[String]>,
+    exclude_rules: Arc<[Glob]>,
 }
 
 impl std::fmt::Debug for RulesetDetector {
@@ -72,19 +136,50 @@ impl std::fmt::Debug for RulesetDetector {
 }
 
 impl RulesetDetector {
-    /// The bundled betterleaks ruleset.
-    pub fn default_rules() -> &'static RulesetDetector {
-        static DEFAULT: LazyLock<RulesetDetector> = LazyLock::new(|| {
-            RulesetDetector::from_toml(default_toml()).expect("bundled ruleset is valid")
-        });
-        &DEFAULT
-    }
+    /// The comment markers gitleaks and betterleaks conventionally use to mark
+    /// a line as intentionally containing a secret.
+    pub const DEFAULT_ALLOW_SIGNATURES: [&'static str; 2] = ["betterleaks:allow", "gitleaks:allow"];
 
-    /// The same rules, reading their vocabulary from `data`.
-    pub fn with_data(mut self, data: &DetectionData) -> Self {
-        self.placeholders = Placeholders::new(data);
-        self.allow_signatures = data.get().allow_signatures.clone().into();
-        self
+    /// Load the rulesets `config` names and apply its settings.
+    ///
+    /// `placeholders` decides which matched values are documentation rather
+    /// than secrets. Relative paths are resolved by the caller.
+    pub fn new(config: &RulesetConfig, placeholders: &Placeholders) -> Result<Self, Error> {
+        // The overwhelmingly common case is the bundled rules alone, where
+        // the parsed ruleset is shared instead of parsed again.
+        let mut detector = match config.rules.as_slice() {
+            [RuleSource::Betterleaks] => BETTERLEAKS_RULESET.clone(),
+            sources => {
+                let mut combined: Option<RawConfig> = None;
+                for source in sources {
+                    let raw = match source {
+                        RuleSource::Betterleaks => {
+                            parse_toml(default_toml(), "builtin:betterleaks")
+                        }
+                        RuleSource::Path(path) => {
+                            let source = std::fs::read_to_string(path).map_err(|err| {
+                                Error::Ruleset(format!("{}: {err}", path.display()))
+                            })?;
+                            parse_toml(&source, &path.display().to_string())
+                        }
+                    }?;
+                    combined = Some(match combined {
+                        None => raw,
+                        Some(previous) => previous.extended_by(raw),
+                    });
+                }
+                Self::build(combined.unwrap_or_default())?
+            }
+        };
+        detector.placeholders = placeholders.clone();
+        detector.allow_signatures = config.allow_signatures.clone().into();
+        detector.exclude_rules = config
+            .exclude_rules
+            .iter()
+            .map(|p| Glob::flat(p))
+            .collect::<Vec<_>>()
+            .into();
+        Ok(detector)
     }
 
     /// A ruleset with no rules.
@@ -95,11 +190,9 @@ impl RulesetDetector {
     /// Parse a ruleset. If it sets `[extend] useDefault = true`, the bundled
     /// rules are included and rules with the same id are replaced.
     pub fn from_toml(source: &str) -> Result<Self, Error> {
-        let mut config: RawConfig =
-            toml::from_str(source).map_err(|err| Error::Ruleset(err.to_string()))?;
+        let mut config = parse_toml(source, "ruleset")?;
         if config.extend.use_default {
-            let base: RawConfig =
-                toml::from_str(default_toml()).map_err(|err| Error::Ruleset(err.to_string()))?;
+            let base = parse_toml(default_toml(), "builtin:betterleaks")?;
             config = base.extended_by(config);
         }
         Self::build(config)
@@ -111,6 +204,33 @@ impl RulesetDetector {
         Self::from_toml(&source).map_err(|err| Error::Ruleset(format!("{}: {err}", path.display())))
     }
 
+    /// Use these allow-comment markers instead of the default ones.
+    pub fn allow_signatures(
+        mut self,
+        signatures: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.allow_signatures = signatures.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Discard matched values that `placeholders` considers documentation.
+    pub fn placeholders(mut self, placeholders: &Placeholders) -> Self {
+        self.placeholders = placeholders.clone();
+        self
+    }
+
+    /// Switch off the rules whose id matches one of these globs, such as
+    /// `github-pat` or `aws-*`. The patterns have no separator; see
+    /// [`Glob::flat`](crate::Glob::flat).
+    pub fn exclude_rules(mut self, patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.exclude_rules = patterns
+            .into_iter()
+            .map(|p| Glob::flat(p.as_ref()))
+            .collect::<Vec<_>>()
+            .into();
+        self
+    }
+
     /// Ids of the loaded rules, in file order.
     pub fn rule_ids(&self) -> impl Iterator<Item = &str> {
         self.inner.rules.iter().map(|r| r.id.as_str())
@@ -119,20 +239,22 @@ impl RulesetDetector {
     fn build(config: RawConfig) -> Result<Self, Error> {
         Ruleset::build(config).map(|inner| Self {
             inner: Arc::new(inner),
-            placeholders: Placeholders::builtin().clone(),
-            allow_signatures: DetectionData::builtin()
-                .get()
-                .allow_signatures
-                .clone()
-                .into(),
+            placeholders: Placeholders::default(),
+            allow_signatures: default_allow_signatures().into(),
+            exclude_rules: Vec::new().into(),
         })
     }
+}
+
+fn parse_toml(source: &str, shown: &str) -> Result<RawConfig, Error> {
+    toml::from_str(source).map_err(|err| Error::Ruleset(format!("{shown}: {err}")))
 }
 
 /// The vocabulary a scan uses to discard matches.
 struct ScanCtx<'a> {
     placeholders: &'a Placeholders,
     allow_signatures: &'a [String],
+    exclude_rules: &'a [Glob],
 }
 
 impl Detector for RulesetDetector {
@@ -144,6 +266,7 @@ impl Detector for RulesetDetector {
         let scan = ScanCtx {
             placeholders: &self.placeholders,
             allow_signatures: &self.allow_signatures,
+            exclude_rules: &self.exclude_rules,
         };
         self.inner.detect(value, &scan, out);
     }
@@ -431,6 +554,12 @@ impl Ruleset {
         let mut seen = HashSet::new();
         for (i, rule) in self.rules.iter().enumerate() {
             if !candidates[i] || rule.skip_report {
+                continue;
+            }
+            // Excluded only as a reporting rule: a rule listed as another
+            // rule's component still runs, so excluding it does not silently
+            // switch off the rules that depend on it.
+            if any_match(scan.exclude_rules, &rule.id) {
                 continue;
             }
             for finding in self.find(i, value, &lines, scan) {
@@ -1078,14 +1207,14 @@ mod tests {
 
     #[test]
     fn bundled_rules_load() {
-        let rules = RulesetDetector::default_rules();
+        let rules = &*BETTERLEAKS_RULESET;
         assert!(rules.rule_ids().count() > 400);
         assert!(rules.inner.global_filter.is_some());
     }
 
     #[test]
     fn finds_known_token_formats() {
-        let rules = RulesetDetector::default_rules();
+        let rules = &*BETTERLEAKS_RULESET;
         let token = "ghp_R4nd0mT0k3nV4lu3AbCdEfGhIjKlMnOpQr12";
         assert_eq!(
             secrets(rules, &format!("export GITHUB_TOKEN={token}")),
@@ -1095,20 +1224,20 @@ mod tests {
 
     #[test]
     fn global_filter_drops_template_values() {
-        let rules = RulesetDetector::default_rules();
+        let rules = &*BETTERLEAKS_RULESET;
         assert!(secrets(rules, "api_key = \"${API_KEY}\"").is_empty());
     }
 
     #[test]
     fn allow_signature_suppresses_findings() {
-        let rules = RulesetDetector::default_rules();
+        let rules = &*BETTERLEAKS_RULESET;
         let token = "ghp_R4nd0mT0k3nV4lu3AbCdEfGhIjKlMnOpQr12";
         assert!(secrets(rules, &format!("token={token} # gitleaks:allow")).is_empty());
     }
 
     #[test]
     fn every_occurrence_is_reported() {
-        let rules = RulesetDetector::default_rules();
+        let rules = &*BETTERLEAKS_RULESET;
         let token = "ghp_R4nd0mT0k3nV4lu3AbCdEfGhIjKlMnOpQr12";
         let text = format!("GITHUB_TOKEN={token}\nagain: {token}");
         assert_eq!(secrets(rules, &text).len(), 2);
@@ -1189,7 +1318,7 @@ filter.matchesAny(before, [`test `])
 
     #[test]
     fn every_bundled_filter_evaluates() {
-        let inner = &RulesetDetector::default_rules().inner;
+        let inner = &BETTERLEAKS_RULESET.inner;
         let value = "line one\nconfig.api_key = \"x9f3k2m8q7w1z5v4\" # note\nline three";
         let start = value.find("api_key").unwrap();
         let end = value.find(" # note").unwrap();

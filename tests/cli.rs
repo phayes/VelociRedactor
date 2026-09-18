@@ -49,15 +49,16 @@ fn stderr(output: &Output) -> String {
 ///
 /// It is the built-in configuration with `edits` applied as first-occurrence
 /// replacements, and with `rules` in place of the trailing (empty) `allow`
-/// and `disallow` sections — which is how a user writes one: start from
+/// section — which is how a user writes one: start from
 /// `stripsecret config` and edit.
-fn write_config(dir: &Path, edits: &[(&str, &str)], rules: &str) -> String {
+fn write_config(dir: &Path, edits: &[(impl AsRef<str>, impl AsRef<str>)], rules: &str) -> String {
     let head = BUILTIN
         .split_once("\nallow:\n")
         .expect("the built-in configuration ends with the rule sections")
         .0;
     let mut source = head.to_owned();
     for (from, to) in edits {
+        let (from, to) = (from.as_ref(), to.as_ref());
         assert!(source.contains(from), "{from:?} is no longer in the file");
         source = source.replacen(from, to, 1);
     }
@@ -71,7 +72,33 @@ fn write_config(dir: &Path, edits: &[(&str, &str)], rules: &str) -> String {
 
 /// A configuration whose only change is the rule sections.
 fn rules_config(dir: &Path, rules: &str) -> String {
-    write_config(dir, &[], rules)
+    write_config(dir, NO_EDITS, rules)
+}
+
+const NO_EDITS: &[(&str, &str)] = &[];
+
+/// The built-in configuration with one more entry in its `detectors` list.
+fn detector_config(dir: &Path, entry: &str) -> String {
+    write_config(dir, &[extra_detector(entry)], "")
+}
+
+/// The built-in configuration with the personal-data detectors added.
+fn pii_config(dir: &Path) -> String {
+    write_config(
+        dir,
+        &[extra_detector(
+            "  - pii:email:\n      allowlist: [\"noreply@\"]\n  - pii:phone\n  - pii:address",
+        )],
+        "",
+    )
+}
+
+/// An extra detector entry, appended after the last one the file lists.
+fn extra_detector(entry: &str) -> (String, String) {
+    (
+        "  - credential-key".to_owned(),
+        format!("  - credential-key\n\n{entry}"),
+    )
 }
 
 #[test]
@@ -140,7 +167,7 @@ fn allow_and_check() {
 
     let both = write_config(
         dir.path(),
-        &[],
+        NO_EDITS,
         &format!("allow:\n  values: [\"{S}\", hunter2]\n"),
     );
     let out = redact(&["--check", "--config", &both], &input);
@@ -170,7 +197,11 @@ fn list_shows_token_start_and_length_but_not_values() {
     assert!(table.lines().next().unwrap().contains("VALUE"), "{table}");
     assert!(table.contains(S), "{table}");
 
-    let allowed = write_config(dir.path(), &[], &format!("allow:\n  values: [\"{S}\"]\n"));
+    let allowed = write_config(
+        dir.path(),
+        NO_EDITS,
+        &format!("allow:\n  values: [\"{S}\"]\n"),
+    );
     let out = list(&["--config", &allowed], &format!("x {S}\n"));
     assert!(stdout(&out).lines().nth(1).unwrap().ends_with("allowed"));
 
@@ -211,7 +242,11 @@ fn json_list() {
     assert!(entry.get("value").is_none());
     assert!(!stdout(&out).contains(S));
 
-    let allowed = write_config(dir.path(), &[], &format!("allow:\n  values: [\"{S}\"]\n"));
+    let allowed = write_config(
+        dir.path(),
+        NO_EDITS,
+        &format!("allow:\n  values: [\"{S}\"]\n"),
+    );
     let out = list(&["--json", "--show-value", "--config", &allowed], &input);
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(doc["redactions"][0]["value"], S);
@@ -221,7 +256,7 @@ fn json_list() {
 #[test]
 fn explicit_format_and_pii() {
     let dir = tempfile::tempdir().unwrap();
-    let config = write_config(dir.path(), &[("categories: []", "categories: [email]")], "");
+    let config = pii_config(dir.path());
     let out = redact(
         &["-f", "json", "--config", &config],
         r#"{"to":"jane@corp.example","id":"x"}"#,
@@ -258,7 +293,7 @@ fn entropy_thresholds_are_configuration() {
 #[test]
 fn custom_rules_and_packs() {
     let dir = tempfile::tempdir().unwrap();
-    let config = rules_config(dir.path(), "disallow:\n  regexes: ['ACME_[0-9]{4}']\n");
+    let config = detector_config(dir.path(), "  - regex:\n      patterns: ['ACME_[0-9]{4}']");
     let out = redact(&["--config", &config], "id ACME_1234\n");
     assert_eq!(stdout(&out), "id REDACTION-1\n");
 
@@ -274,10 +309,10 @@ fn custom_rules_and_packs() {
     .unwrap();
     let with_pack = write_config(
         dir.path(),
-        &[(
-            "rules-packs: []",
-            &format!("rules-packs: [\"{}\"]", packs.path().to_str().unwrap()),
-        )],
+        &[extra_detector(&format!(
+            "  - rule-packs:\n      paths:\n        - {}",
+            packs.path().to_str().unwrap()
+        ))],
         "",
     );
     let out = redact(&["--config", &with_pack], "ref TEAM-123\n");
@@ -287,7 +322,7 @@ fn custom_rules_and_packs() {
     let doc: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
     assert_eq!(doc["redactions"][0]["detector"], "team.t");
 
-    let broken = rules_config(dir.path(), "disallow:\n  regexes: ['unclosed(']\n");
+    let broken = detector_config(dir.path(), "  - regex:\n      patterns: ['unclosed(']");
     let out = redact(&["--config", &broken], "");
     assert_eq!(out.status.code(), Some(2));
     assert!(
@@ -306,7 +341,7 @@ fn custom_ruleset_replaces_bundled_rules() {
     // The path is relative to the configuration file that names it.
     let config = write_config(
         dir.path(),
-        &[("  # path: rules.toml", "  path: rules.toml")],
+        &[("        - builtin:betterleaks", "        - ./rules.toml")],
         "",
     );
     let input = "ZZ1234 ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2\n";
@@ -433,7 +468,7 @@ fn path_rules() {
     let dir = tempfile::tempdir().unwrap();
     let input = r#"{"users":[{"ssn":"123-45-6789"}],"db":{"note":"hi"}}"#;
 
-    let any_ssn = rules_config(dir.path(), "disallow:\n  paths: [\"**.ssn\"]\n");
+    let any_ssn = detector_config(dir.path(), "  - path:\n      paths: [\"**.ssn\"]");
     let out = redact(&["-f", "json", "--config", &any_ssn], input);
     assert_eq!(
         stdout(&out),
@@ -458,13 +493,16 @@ fn path_rules() {
 fn value_and_regex_rules() {
     let dir = tempfile::tempdir().unwrap();
 
-    let value = rules_config(dir.path(), "disallow:\n  values: [Bluebird]\n");
+    let value = detector_config(dir.path(), "  - value:\n      values: [Bluebird]");
     let out = redact(&["--config", &value], "codename Bluebird\n");
     assert_eq!(stdout(&out), "codename REDACTION-1\n");
 
-    let both = rules_config(
+    let both = write_config(
         dir.path(),
-        "allow:\n  regexes: ['ACME-1234']\ndisallow:\n  regexes: ['ACME-[0-9]{4}']\n",
+        &[extra_detector(
+            "  - regex:\n      patterns: ['ACME-[0-9]{4}']",
+        )],
+        "allow:\n  regexes: ['ACME-1234']\n",
     );
     let out = redact(&["--config", &both], "ACME-1234 and ACME-9999\n");
     // An allowed secret still takes an id, so the next one is REDACTION-2.
@@ -481,7 +519,7 @@ fn rule_lists_take_several_entries() {
     let dir = tempfile::tempdir().unwrap();
     let config = rules_config(
         dir.path(),
-        "disallow:\n  values: [alpha, gamma]\n  regexes: ['A-[0-9]+', 'C-[0-9]+']\n",
+        "  - value:\n      values: [alpha, gamma]\n  - regex:\n      patterns: ['A-[0-9]+', 'C-[0-9]+']",
     );
     let out = redact(&["--config", &config], "alpha beta gamma A-11 B-22 C-33\n");
     assert_eq!(
@@ -490,47 +528,52 @@ fn rule_lists_take_several_entries() {
     );
 
     let doc = r#"{"a":"1","b":"2","c":"3"}"#;
-    let paths = rules_config(dir.path(), "disallow:\n  paths: [a, c]\n");
+    let paths = detector_config(dir.path(), "  - path:\n      paths: [a, c]");
     let out = redact(&["-f", "json", "--config", &paths], doc);
     assert_eq!(
         stdout(&out),
         r#"{"a":"REDACTION-1","b":"2","c":"REDACTION-2"}"#
     );
 
-    let spared = rules_config(
+    let spared = write_config(
         dir.path(),
-        "allow:\n  paths: [a, c]\ndisallow:\n  paths: [\"**\"]\n",
+        &[extra_detector("  - path:\n      paths: [\"**\"]")],
+        "allow:\n  paths: [a, c]\n",
     );
     let out = redact(&["-f", "json", "--config", &spared], doc);
     assert_eq!(stdout(&out), r#"{"a":"1","b":"REDACTION-1","c":"3"}"#);
 }
 
+/// There is no switch for turning a detector off: the `detectors` list is
+/// exactly what runs.
 #[test]
-fn exclude_detector_switches_detectors_off() {
+fn a_detector_that_is_not_listed_does_not_run() {
     let dir = tempfile::tempdir().unwrap();
     let input = format!("{S} jane@corp.example\n");
 
-    let no_pii = write_config(
-        dir.path(),
-        &[
-            ("categories: []", "categories: [email]"),
-            ("exclude: []", "exclude: [\"pii:*\"]"),
-        ],
-        "",
-    );
-    let out = redact(&["--config", &no_pii], &input);
+    // The shipped file lists no personal-data detector, so the address stays.
+    let out = redact(&[], &input);
     assert_eq!(stdout(&out), "REDACTION-1 jane@corp.example\n");
 
-    let nothing = write_config(
+    // Uncommenting the `pii:` block is all it takes to switch it on.
+    let with_pii = pii_config(dir.path());
+    let out = redact(&["--config", &with_pii], &input);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "REDACTION-1 REDACTION-2\n");
+
+    // A detector name the crate does not know is an error, not a no-op.
+    let unknown = write_config(
         dir.path(),
-        &[
-            ("categories: []", "categories: [email]"),
-            ("exclude: []", "exclude: [\"*\"]"),
-        ],
+        &[("  - credentialed-uri", "  - credentialed-url")],
         "",
     );
-    let out = redact(&["--config", &nothing], &input);
-    assert_eq!(stdout(&out), input);
+    let out = redact(&["--config", &unknown], &input);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        stderr(&out).contains("credentialed-url"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -538,8 +581,13 @@ fn config_replaces_the_builtin_rules() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(
         dir.path(),
-        &[("comments: false", "comments: true")],
-        "allow:\n  paths: [\"build.**\"]\ndisallow:\n  paths: [\"**.customer\"]\n  regexes: ['ACME-[0-9]{4}']\n",
+        &[
+            ("comments: false".to_owned(), "comments: true".to_owned()),
+            extra_detector(
+                "  - path:\n      paths: [\"**.customer\"]\n  - regex:\n      patterns: ['ACME-[0-9]{4}']",
+            ),
+        ],
+        "allow:\n  paths: [\"build.**\"]\n",
     );
 
     let input = format!(
@@ -565,7 +613,7 @@ fn an_incomplete_config_is_rejected() {
     fs::write(&path, "allow:\n  values: [hunter2]\n").unwrap();
     let out = redact(&["--config", path.to_str().unwrap()], "");
     assert_eq!(out.status.code(), Some(2));
-    assert!(stderr(&out).contains("policy"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("formats"), "{}", stderr(&out));
 
     fs::write(&path, "nonsense: 1\n").unwrap();
     let out = redact(&["--config", path.to_str().unwrap()], "");
@@ -584,7 +632,9 @@ fn config_resolves_rule_paths_relative_to_itself() {
     .unwrap();
     let config = write_config(
         dir.path(),
-        &[("rules-packs: []", "rules-packs: [rules]")],
+        &[extra_detector(
+            "  - rule-packs:\n      paths:\n        - rules",
+        )],
         "",
     );
 
@@ -638,19 +688,22 @@ fn skipped_keys_are_configuration() {
     let input = r#"{"session_id":"abc123"}"#;
 
     // By default a key ending in `id` is never scanned, so no rule can reach
-    // it: this is what makes `disallow.paths` look like it does nothing.
-    let unreachable = rules_config(dir.path(), "disallow:\n  paths: [session_id]\n");
+    // it: this is what makes a `path` detector look like it does nothing.
+    let unreachable = detector_config(dir.path(), "  - path:\n      paths: [session_id]");
     let out = redact(&["-f", "json", "--config", &unreachable], input);
     assert_eq!(stdout(&out), input);
 
     // Dropping the suffix from the configuration makes the rule bite.
     let reachable = write_config(
         dir.path(),
-        &[(
-            r#"skip-key-suffixes: ["signature", "id", "ids"]"#,
-            r#"skip-key-suffixes: ["signature"]"#,
-        )],
-        "disallow:\n  paths: [session_id]\n",
+        &[
+            (
+                r#"skip-key-suffixes: ["signature", "id", "ids"]"#.to_owned(),
+                r#"skip-key-suffixes: ["signature"]"#.to_owned(),
+            ),
+            extra_detector("  - path:\n      paths: [session_id]"),
+        ],
+        "",
     );
     let out = redact(&["-f", "json", "--config", &reachable], input);
     assert!(out.status.success(), "{}", stderr(&out));
