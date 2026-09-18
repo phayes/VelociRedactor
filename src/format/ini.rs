@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use ini_roundtrip::{Item, Parser};
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// INI-style configuration (`.ini`, `.cfg`, `.npmrc`, `.gitconfig`, ...).
 ///
@@ -97,6 +97,8 @@ pub(super) fn rewrite_lines(
         name: None,
         lines: Vec::new(),
     }];
+    let want_comments = visitor.wants_comments();
+    let mut comments = Vec::new();
     for item in Parser::new(text) {
         let line = match item {
             Item::Section { name, .. } if style.sections => {
@@ -122,7 +124,13 @@ pub(super) fn rewrite_lines(
                 value: unquote(val),
             },
             Item::Property { raw, val: None, .. } => Line::Text(raw),
-            Item::Comment { .. } | Item::Blank { .. } | Item::SectionEnd => continue,
+            Item::Comment { raw } => {
+                if want_comments {
+                    comments.push(locate(text, raw));
+                }
+                continue;
+            }
+            Item::Blank { .. } | Item::SectionEnd => continue,
         };
         sections
             .last_mut()
@@ -132,6 +140,7 @@ pub(super) fn rewrite_lines(
     }
 
     let mut splicer = Splicer::new(input);
+    comment::visit(text, &comments, visitor, &mut splicer);
     let (root, named) = sections.split_first().expect("root section exists");
     enter_section(visitor, root);
     visit_lines(text, visitor, &mut splicer, &root.lines);

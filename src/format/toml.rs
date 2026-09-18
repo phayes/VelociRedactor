@@ -1,6 +1,6 @@
 use toml_edit::{Document, Item, Table, Value};
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// TOML. String values are edited in place.
 #[derive(Debug, Clone, Copy, Default)]
@@ -28,10 +28,14 @@ impl Format for Toml {
     fn rewrite(&self, input: &[u8], visitor: &mut dyn LeafVisitor) -> Result<Vec<u8>, FormatError> {
         let text = std::str::from_utf8(input).map_err(|e| FormatError::new("toml", e))?;
         let document = Document::parse(text).map_err(|e| FormatError::new("toml", e))?;
+        let mut splicer = Splicer::new(input);
+        if visitor.wants_comments() {
+            comment::visit(text, &comment::toml(text), visitor, &mut splicer);
+        }
         let mut walker = Walker {
             text,
             visitor,
-            splicer: Splicer::new(input),
+            splicer,
         };
         walker.table(document.as_table(), None);
         Ok(walker.splicer.finish())

@@ -2,30 +2,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use super::data::DetectionData;
 use crate::render::is_redaction_token;
-
-/// Lowercase values that are documentation placeholders or earlier
-/// redactions rather than real credentials.
-const PLACEHOLDER_VALUES: &[&str] = &[
-    "redacted",
-    "[redacted]",
-    "<redacted>",
-    "changeme",
-    "example",
-    "placeholder",
-    "your_password",
-    "your_db_password",
-    "your_secret",
-    "secret_here",
-    "password",
-    "db_password",
-    "secret",
-    "secret_key",
-    "api_key",
-    "api_secret",
-    "api_token",
-    "api_secret_key",
-];
 
 /// Lowercase words joined by `-` or `_`. Digits, capitals, and other
 /// characters are excluded so `<hunter2>` or `<RealPassword>` still count as
@@ -39,42 +17,77 @@ static BRACKETED_INTERIOR: LazyLock<Regex> =
 /// `REDACTION-N` tokens), common documentation placeholders such as
 /// `changeme` or `<password>`, `${VAR}` expansions, and masks such as `****`.
 pub fn is_placeholder(value: &str) -> bool {
-    let trimmed = value.trim().trim_matches(['"', '\'']);
-    if trimmed.is_empty() || is_bracketed(trimmed) || is_redaction_token(trimmed) {
-        return true;
-    }
-    let normalized = trimmed.to_lowercase();
-    if normalized.starts_with("${") && normalized.ends_with('}') {
-        return true;
-    }
-    if PLACEHOLDER_VALUES.contains(&normalized.as_str()) {
-        return true;
-    }
-    is_mask(normalized.as_bytes())
+    Placeholders::builtin().is_placeholder(value)
 }
 
-/// A `<name>` placeholder such as `<password>` or `<your-db-password>`. The
-/// minimum length keeps `<a>` and `<ab>` from qualifying.
-fn is_bracketed(s: &str) -> bool {
-    s.len() >= 5
-        && s.starts_with('<')
-        && s.ends_with('>')
-        && BRACKETED_INTERIOR.is_match(&s[1..s.len() - 1])
+/// The placeholder vocabulary from a configuration. Cloning is cheap.
+#[derive(Debug, Clone)]
+pub struct Placeholders {
+    data: DetectionData,
 }
 
-/// A run of one masking character (`***`, `xxxx`, `....`, `----`). At least
-/// three characters, so short values like `x` are not mistaken for masks.
-fn is_mask(s: &[u8]) -> bool {
-    match s {
-        [first @ (b'*' | b'x' | b'.' | b'-'), rest @ ..] if s.len() >= 3 => {
-            rest.iter().all(|b| b == first)
+impl Placeholders {
+    pub fn new(data: &DetectionData) -> Self {
+        Self { data: data.clone() }
+    }
+
+    /// The vocabulary from the configuration built into the binary.
+    pub fn builtin() -> &'static Placeholders {
+        static PLACEHOLDERS: LazyLock<Placeholders> =
+            LazyLock::new(|| Placeholders::new(DetectionData::builtin()));
+        &PLACEHOLDERS
+    }
+
+    /// Whether a credential-shaped value is obviously not a real secret.
+    pub fn is_placeholder(&self, value: &str) -> bool {
+        let placeholder = &self.data.get().placeholder;
+        let trimmed = value.trim().trim_matches(['"', '\'']);
+        if trimmed.is_empty() || self.is_bracketed(trimmed) || is_redaction_token(trimmed) {
+            return true;
         }
-        _ => false,
+        // Both tests below see the lowercased value, which is why `XXXX` is a
+        // mask and why the configured values must be lowercase.
+        let normalized = trimmed.to_lowercase();
+        if normalized.starts_with("${") && normalized.ends_with('}') {
+            return true;
+        }
+        if placeholder.values.contains(&normalized) {
+            return true;
+        }
+        self.is_mask(normalized.as_bytes())
+    }
+
+    /// A `<name>` placeholder such as `<password>` or `<your-db-password>`.
+    /// The minimum length keeps `<a>` and `<ab>` from qualifying.
+    fn is_bracketed(&self, s: &str) -> bool {
+        s.len() >= self.data.get().placeholder.bracket_min_length
+            && s.starts_with('<')
+            && s.ends_with('>')
+            && BRACKETED_INTERIOR.is_match(&s[1..s.len() - 1])
+    }
+
+    /// A run of one masking character (`***`, `xxxx`, `....`, `----`), long
+    /// enough that short values like `x` are not mistaken for masks.
+    fn is_mask(&self, s: &[u8]) -> bool {
+        let placeholder = &self.data.get().placeholder;
+        match s.split_first() {
+            Some((first, rest))
+                if s.len() >= placeholder.mask_min_length
+                    && placeholder.mask_characters.contains(first) =>
+            {
+                rest.iter().all(|b| b == first)
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn has_real_value(&self, value: &str) -> bool {
+        !value.is_empty() && !self.is_placeholder(value)
     }
 }
 
 pub(crate) fn has_real_value(value: &str) -> bool {
-    !value.is_empty() && !is_placeholder(value)
+    Placeholders::builtin().has_real_value(value)
 }
 
 /// Shrink `range` to exclude one pair of matching surrounding quotes.

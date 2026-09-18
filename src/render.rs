@@ -4,8 +4,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::Finding;
-use crate::detect::Detection;
+use crate::detect::{Detection, describe_regex_error};
+use crate::{Error, Finding};
 
 /// Every replacement token starts with this.
 pub const TOKEN_PREFIX: &str = "REDACTION-";
@@ -28,10 +28,15 @@ pub fn find_tokens(s: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     TOKEN.find_iter(s).map(|m| m.range())
 }
 
-/// Secrets to leave in place, identified by exact value.
+/// Secrets to leave in place, identified by exact value or by a pattern the
+/// whole value matches.
+///
+/// An allowed value stays in the document even when a detector, an explicit
+/// disallowed value, or a disallowed path found it: allowing is the last word.
 #[derive(Debug, Clone, Default)]
 pub struct Allow {
     values: HashSet<String>,
+    regexes: Vec<Regex>,
 }
 
 impl Allow {
@@ -45,22 +50,40 @@ impl Allow {
         Self::none().with_values(values)
     }
 
+    /// Leave unredacted every secret that one of these patterns matches in
+    /// full (Rust `regex` syntax).
+    pub fn regexes<S: AsRef<str>>(patterns: impl IntoIterator<Item = S>) -> Result<Self, Error> {
+        Self::none().with_regexes(patterns)
+    }
+
     pub fn with_values<S: Into<String>>(mut self, values: impl IntoIterator<Item = S>) -> Self {
         self.values.extend(values.into_iter().map(Into::into));
         self
     }
 
+    /// Add patterns that a secret must match in full to be allowed.
+    ///
+    /// Compile errors deliberately omit the pattern text, since a pattern may
+    /// itself contain the secret it refers to.
+    pub fn with_regexes<S: AsRef<str>>(
+        mut self,
+        patterns: impl IntoIterator<Item = S>,
+    ) -> Result<Self, Error> {
+        for pattern in patterns {
+            let anchored = format!("^(?s:{})$", pattern.as_ref());
+            let regex = Regex::new(&anchored).map_err(|err| Error::InvalidPattern {
+                name: "allow-regex".into(),
+                message: describe_regex_error(&err),
+            })?;
+            self.regexes.push(regex);
+        }
+        Ok(self)
+    }
+
     /// Whether `finding` should be left unredacted.
     pub fn allows(&self, finding: &Finding) -> bool {
         self.values.contains(&finding.secret)
-    }
-
-    /// Number of values in this list that match none of `findings`.
-    pub fn unmatched_value_count(&self, findings: &[Finding]) -> usize {
-        self.values
-            .iter()
-            .filter(|v| !findings.iter().any(|f| &f.secret == *v))
-            .count()
+            || self.regexes.iter().any(|r| r.is_match(&finding.secret))
     }
 }
 
@@ -132,6 +155,7 @@ mod tests {
             detector: "d".into(),
             len: secret.len(),
             field: None,
+            path: None,
             offsets: vec![],
             occurrences: 1,
         }
@@ -156,6 +180,27 @@ mod tests {
         assert!(Allow::values(["v"]).allows(&finding));
         assert!(!Allow::values(["w"]).allows(&finding));
         assert!(!Allow::none().allows(&finding));
+    }
+
+    #[test]
+    fn allow_regexes_must_match_the_whole_secret() {
+        let finding = finding("EMP-123456");
+        assert!(Allow::regexes([r"EMP-\d{6}"]).unwrap().allows(&finding));
+        assert!(Allow::regexes([r"EMP-\d+"]).unwrap().allows(&finding));
+        assert!(!Allow::regexes([r"EMP-\d{3}"]).unwrap().allows(&finding));
+        assert!(!Allow::regexes([r"\d{6}"]).unwrap().allows(&finding));
+        assert!(Allow::regexes([".*"]).unwrap().allows(&finding));
+    }
+
+    #[test]
+    fn allow_regexes_match_across_lines() {
+        assert!(Allow::regexes(["a.b"]).unwrap().allows(&finding("a\nb")));
+    }
+
+    #[test]
+    fn invalid_allow_regex_does_not_echo_the_pattern() {
+        let err = Allow::regexes(["sk-live-SECRET("]).unwrap_err();
+        assert!(!err.to_string().contains("SECRET"), "{err}");
     }
 
     #[test]

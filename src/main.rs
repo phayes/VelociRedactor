@@ -6,16 +6,21 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
-use stripsecret::detect::{
-    EntropyDetector, Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir,
-};
+use stripsecret::config::Config;
 use stripsecret::{Allow, Finding, FormatHint, Redaction, Redactor};
 
 /// Redact secrets and personal data from files.
 ///
 /// Each redacted value becomes a token `REDACTION-N`, where `N` numbers
 /// distinct secrets in order of first appearance. Equal values share a
-/// number. False positives can be let through with `--allow-value`.
+/// number.
+///
+/// What counts as a secret is configuration, not command line: the options
+/// here say how to apply the rules, and `stripsecret config` prints the rules
+/// that are built in. Write your own by editing a copy of them:
+///
+///     stripsecret config > my-config.yml
+///     stripsecret redact --config my-config.yml secrets.json
 #[derive(Debug, Parser)]
 #[command(version, about, long_about)]
 struct Cli {
@@ -31,6 +36,8 @@ enum Command {
     List(ListArgs),
     /// List the supported input formats.
     Formats,
+    /// Print the built-in configuration, as a starting point for your own.
+    Config,
 }
 
 #[derive(Debug, Args)]
@@ -75,6 +82,10 @@ struct InputArgs {
     /// File to read. Reads standard input when omitted or `-`.
     file: Option<PathBuf>,
 
+    /// Rules to apply, replacing the built-in ones. See `stripsecret config`.
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
     /// Input format. Detected from the file name or content when omitted.
     #[arg(short, long, value_name = "NAME")]
     format: Option<String>,
@@ -82,43 +93,20 @@ struct InputArgs {
     /// Treat the input as plain text, skipping format detection.
     #[arg(long, conflicts_with = "format")]
     raw: bool,
-
-    /// Entropy threshold in bits per byte. Tokens above this are redacted.
-    #[arg(long, value_name = "BITS", default_value_t = EntropyDetector::DEFAULT_THRESHOLD)]
-    entropy_threshold: f64,
-
-    /// Entropy threshold for values under a sensitive key (api_key, token, …).
-    #[arg(long, value_name = "BITS", default_value_t = EntropyDetector::SENSITIVE_THRESHOLD)]
-    sensitive_threshold: f64,
-
-    /// Leave this exact value unredacted (repeatable).
-    #[arg(long, value_name = "VALUE")]
-    allow_value: Vec<String>,
-
-    /// Also redact personal data (comma-separated: email, phone, address).
-    #[arg(long, value_name = "KINDS", value_delimiter = ',')]
-    pii: Vec<Pii>,
-
-    /// Extra personal-data pattern (repeatable).
-    #[arg(long, value_name = "LABEL=REGEX")]
-    pii_pattern: Vec<String>,
-
-    /// Extra secret pattern (repeatable).
-    #[arg(long, value_name = "LABEL=REGEX")]
-    rule: Vec<String>,
-
-    /// Rule pack file, or directory of packs (repeatable).
-    #[arg(long, value_name = "PATH")]
-    rules_pack: Vec<PathBuf>,
-
-    /// Use this betterleaks/gitleaks ruleset instead of the bundled one.
-    #[arg(long, value_name = "FILE")]
-    ruleset: Option<PathBuf>,
 }
 
 impl InputArgs {
     fn path(&self) -> Option<&Path> {
         self.file.as_deref().filter(|p| *p != Path::new("-"))
+    }
+
+    /// The rules to apply: the file given with `--config`, which replaces the
+    /// built-in configuration, or the built-in configuration itself.
+    fn config(&self) -> Result<Config> {
+        match &self.config {
+            Some(path) => Ok(Config::from_path(path)?),
+            None => Ok(Config::builtin().clone()),
+        }
     }
 }
 
@@ -127,6 +115,7 @@ fn main() -> ExitCode {
         Command::Redact(args) => redact(args),
         Command::List(args) => list(args),
         Command::Formats => formats(),
+        Command::Config => print_builtin_config(),
     };
     match result {
         Ok(code) => code,
@@ -142,9 +131,10 @@ fn redact(args: RedactArgs) -> Result<ExitCode> {
     if args.in_place && path.is_none() {
         bail!("--in-place needs a file");
     }
-    let redactor = build_redactor(&args.input)?;
+    let config = args.input.config()?;
+    let redactor = build_redactor(&config)?;
     let input = read_input(path)?;
-    let (redaction, allow) = scan(&redactor, &args.input, &input)?;
+    let (redaction, allow) = scan(&redactor, &config, &args.input, &input)?;
 
     let output = redaction.render(&allow)?;
     match (&args.output, path) {
@@ -162,9 +152,10 @@ fn redact(args: RedactArgs) -> Result<ExitCode> {
 }
 
 fn list(args: ListArgs) -> Result<ExitCode> {
-    let redactor = build_redactor(&args.input)?;
+    let config = args.input.config()?;
+    let redactor = build_redactor(&config)?;
     let input = read_input(args.input.path())?;
-    let (redaction, allow) = scan(&redactor, &args.input, &input)?;
+    let (redaction, allow) = scan(&redactor, &config, &args.input, &input)?;
 
     let mut stdout = io::stdout().lock();
     if args.json {
@@ -175,6 +166,14 @@ fn list(args: ListArgs) -> Result<ExitCode> {
     Ok(exit_code(args.check, &redaction, &allow))
 }
 
+/// Print the built-in configuration verbatim, comments and all.
+fn print_builtin_config() -> Result<ExitCode> {
+    io::stdout()
+        .write_all(Config::builtin_source().as_bytes())
+        .context("writing standard output")?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn formats() -> Result<ExitCode> {
     let redactor = Redactor::builder().build();
     for format in redactor.formats().iter() {
@@ -183,6 +182,7 @@ fn formats() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Exit 1 under `--check` when anything is still redacted.
 fn exit_code(check: bool, redaction: &Redaction<'_>, allow: &Allow) -> ExitCode {
     let remaining = redaction.findings().iter().any(|f| !allow.allows(f));
     if check && remaining {
@@ -208,10 +208,12 @@ fn read_input(path: Option<&Path>) -> Result<Vec<u8>> {
 /// Redact `input` and build the allow list, printing warnings to stderr.
 fn scan<'a>(
     redactor: &Redactor,
+    config: &Config,
     args: &InputArgs,
     input: &'a [u8],
 ) -> Result<(Redaction<'a>, Allow)> {
     let hint = match (&args.format, args.raw, args.path()) {
+        (_, true, _) => FormatHint::Raw,
         (Some(name), _, _) => {
             if redactor.formats().get(name).is_none() {
                 let names: Vec<_> = redactor.formats().names().collect();
@@ -219,71 +221,25 @@ fn scan<'a>(
             }
             FormatHint::Name(name)
         }
-        (None, true, _) => FormatHint::Raw,
         (None, false, Some(path)) => FormatHint::Path(path),
         (None, false, None) => FormatHint::Auto,
     };
 
     let redaction = redactor.redact(input, hint)?;
-    let allow = Allow::values(args.allow_value.iter().cloned());
+    let allow = config.allow()?;
 
     for warning in redaction.warnings() {
         eprintln!("warning: {warning}");
     }
-    let unmatched_values = allow.unmatched_value_count(redaction.findings());
-    if unmatched_values > 0 {
-        eprintln!("warning: {unmatched_values} --allow-value value(s) matched no redaction");
-    }
     Ok((redaction, allow))
 }
 
-fn build_redactor(args: &InputArgs) -> Result<Redactor> {
-    let mut builder = Redactor::builder()
-        .entropy_threshold(args.entropy_threshold)
-        .sensitive_threshold(args.sensitive_threshold)
-        .pii(args.pii.iter().copied());
-
-    if let Some(path) = &args.ruleset {
-        builder = builder.ruleset(RulesetDetector::from_path(path)?);
+fn build_redactor(config: &Config) -> Result<Redactor> {
+    let (redactor, warnings) = config.redactor()?;
+    for warning in warnings {
+        eprintln!("warning: {warning}");
     }
-    for spec in &args.rule {
-        let (label, pattern) = split_spec(spec, "--rule")?;
-        builder = builder.detector(RegexDetector::new(label, pattern)?);
-    }
-    for spec in &args.pii_pattern {
-        let (label, pattern) = split_spec(spec, "--pii-pattern")?;
-        builder = builder.detector(RegexDetector::new(format!("pii:{label}"), pattern)?);
-    }
-    for path in &args.rules_pack {
-        let packs = if path.is_dir() {
-            let loaded = load_pack_dir(path)?;
-            for warning in &loaded.warnings {
-                eprintln!("warning: {warning}");
-            }
-            loaded.packs
-        } else {
-            let source =
-                fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-            vec![Pack::parse(&source, path)?]
-        };
-        for pack in packs {
-            let (detectors, warnings) = pack.detectors();
-            for warning in warnings {
-                eprintln!("warning: {warning}");
-            }
-            for detector in detectors {
-                builder = builder.detector(detector);
-            }
-        }
-    }
-    Ok(builder.build())
-}
-
-fn split_spec<'a>(spec: &'a str, flag: &str) -> Result<(&'a str, &'a str)> {
-    match spec.split_once('=') {
-        Some((label, pattern)) if !label.is_empty() && !pattern.is_empty() => Ok((label, pattern)),
-        _ => bail!("{flag} expects LABEL=REGEX"),
-    }
+    Ok(redactor)
 }
 
 fn print_table(
@@ -364,6 +320,7 @@ fn print_json(
                 "line": line,
                 "column": column,
                 "field": f.field,
+                "path": f.path,
                 "occurrences": f.occurrences,
                 "offsets": f.offsets,
                 "allowed": allow.allows(f),
@@ -390,8 +347,8 @@ fn location(redaction: &Redaction<'_>, finding: &Finding) -> String {
         let (line, col) = redaction.line_col(offset);
         parts.push(format!("{line}:{col}"));
     }
-    if let Some(field) = &finding.field {
-        parts.push(format!("[{field}]"));
+    if let Some(name) = finding.path.as_ref().or(finding.field.as_ref()) {
+        parts.push(format!("[{name}]"));
     }
     parts.join(" ")
 }

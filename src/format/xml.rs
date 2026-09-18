@@ -4,7 +4,7 @@ use quick_xml::Reader;
 use quick_xml::escape::{escape, resolve_predefined_entity};
 use quick_xml::events::{BytesStart, Event};
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// XML, including XML property lists, SVG, and project files.
 ///
@@ -38,11 +38,16 @@ impl Format for Xml {
 
     fn rewrite(&self, input: &[u8], visitor: &mut dyn LeafVisitor) -> Result<Vec<u8>, FormatError> {
         let text = std::str::from_utf8(input).map_err(|e| FormatError::new("xml", e))?;
+        let mut splicer = Splicer::new(input);
+        if visitor.wants_comments() {
+            comment::visit(text, &comment_ranges(text)?, visitor, &mut splicer);
+        }
+
         let mut reader = Reader::from_str(text);
         let mut walker = Walker {
             text,
             visitor,
-            splicer: Splicer::new(input),
+            splicer,
             elements: Vec::new(),
             run: None,
             dict_key: None,
@@ -100,6 +105,29 @@ impl Format for Xml {
             }
         }
         Ok(walker.splicer.finish())
+    }
+}
+
+/// The byte ranges of the comment bodies in `text`, without the `<!--` and
+/// `-->` markers.
+fn comment_ranges(text: &str) -> Result<Vec<Range<usize>>, FormatError> {
+    let mut reader = Reader::from_str(text);
+    let mut ranges = Vec::new();
+    loop {
+        let at = reader.buffer_position() as usize;
+        match reader.read_event().map_err(|e| {
+            FormatError::new("xml", format!("at byte {}: {e}", reader.error_position()))
+        })? {
+            Event::Eof => return Ok(ranges),
+            Event::Comment(body) => {
+                let end = reader.buffer_position() as usize;
+                let start = at + "<!--".len();
+                if start + "-->".len() <= end && !body.is_empty() {
+                    ranges.push(start..end - "-->".len());
+                }
+            }
+            _ => {}
+        }
     }
 }
 

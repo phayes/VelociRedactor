@@ -3,8 +3,10 @@
 //! A [`Format`] knows how to find the user-visible values in a document and how
 //! to write the document back with some of those values replaced. It reports
 //! values to a [`LeafVisitor`], which decides what (if anything) to replace.
-//! Keys, comments, and layout are never shown to the visitor, so only values
-//! can be redacted.
+//! Keys and layout are never shown to the visitor, so only values can be
+//! redacted. Comments are shown only to a visitor that asks for them with
+//! [`LeafVisitor::wants_comments`], and arrive as [`LeafKind::Comment`]
+//! leaves before the document's own values.
 //!
 //! Implement [`Format`] and register it with
 //! [`RedactorBuilder::format`](crate::RedactorBuilder::format) to support a new
@@ -16,6 +18,21 @@ use std::sync::Arc;
 
 pub use crate::error::FormatError;
 
+// Which comment scanners are used depends on the formats compiled in; the
+// full build still reports anything genuinely unused.
+#[cfg_attr(
+    not(all(
+        feature = "json",
+        feature = "yaml",
+        feature = "toml",
+        feature = "hcl",
+        feature = "ini",
+        feature = "xml",
+        feature = "properties"
+    )),
+    allow(dead_code)
+)]
+mod comment;
 mod splice;
 mod text;
 
@@ -105,6 +122,17 @@ pub trait Format: Send + Sync {
     fn rewrite(&self, input: &[u8], visitor: &mut dyn LeafVisitor) -> Result<Vec<u8>, FormatError>;
 }
 
+/// What part of a document a value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeafKind {
+    /// A value of the document itself.
+    #[default]
+    Value,
+    /// A comment, including its marker. Only reported when the visitor asks
+    /// for comments with [`LeafVisitor::wants_comments`].
+    Comment,
+}
+
 /// A single value in a document.
 #[derive(Debug, Clone, Copy)]
 pub struct Leaf<'a> {
@@ -116,6 +144,8 @@ pub struct Leaf<'a> {
     /// Byte offset in the input where the value's text starts (after any
     /// opening quote), when the format knows it.
     pub offset: Option<usize>,
+    /// Whether this is a value or a comment.
+    pub kind: LeafKind,
 }
 
 impl<'a> Leaf<'a> {
@@ -124,6 +154,15 @@ impl<'a> Leaf<'a> {
             value,
             key: None,
             offset: None,
+            kind: LeafKind::Value,
+        }
+    }
+
+    /// A comment, whose text is `value`.
+    pub fn comment(value: &'a str) -> Self {
+        Self {
+            kind: LeafKind::Comment,
+            ..Self::new(value)
         }
     }
 
@@ -194,6 +233,15 @@ pub trait LeafVisitor {
     fn exit(&mut self);
     /// Returns the replacement for this value, or `None` to keep it.
     fn leaf(&mut self, leaf: &Leaf<'_>) -> Option<Replacement>;
+
+    /// Whether comments should be reported as values.
+    ///
+    /// Formats that have comments check this before locating them, and must
+    /// report the same comments, in the same order, whenever it is `true`.
+    /// Comments are reported before the document's own values.
+    fn wants_comments(&self) -> bool {
+        false
+    }
 }
 
 /// The new text for a value.

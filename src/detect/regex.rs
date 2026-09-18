@@ -43,7 +43,7 @@ impl Detector for RegexDetector {
     }
 }
 
-fn describe_regex_error(err: &regex::Error) -> String {
+pub(crate) fn describe_regex_error(err: &regex::Error) -> String {
     match err {
         regex::Error::CompiledTooBig(_) => "pattern is too large".into(),
         _ => "pattern does not compile".into(),

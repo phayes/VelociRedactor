@@ -9,28 +9,38 @@ use std::ops::Range;
 
 mod connstr;
 mod credential;
+mod data;
 mod entropy;
 mod pack;
+mod path;
 mod pii;
 mod placeholder;
 mod provider;
 mod regex;
 mod ruleset;
 mod uri;
+mod value;
 
 pub use connstr::ConnectionStringDetector;
 pub(crate) use credential::normalize_key as credential_key_normalize;
 pub use credential::{CredentialAssignmentDetector, CredentialKeyDetector};
+pub use data::{
+    CredentialContextConfig, DetectionData, EntropyConfig, PlaceholderConfig, PolicyConfig,
+    ProvidersConfig, SkipObjectConfig,
+};
 pub use entropy::{EntropyDetector, shannon_entropy};
 pub use pack::{
     LoadedPacks, MAX_PACK_FILE_BYTES, MAX_PACK_FILES, Pack, PackRule, PackSample, load_pack_dir,
 };
+pub use path::PathDetector;
 pub use pii::{AddressDetector, EmailDetector, PhoneDetector, Pii};
-pub use placeholder::is_placeholder;
+pub use placeholder::{Placeholders, is_placeholder};
 pub use provider::ProviderTokenDetector;
 pub use regex::RegexDetector;
+pub(crate) use regex::describe_regex_error;
 pub use ruleset::RulesetDetector;
 pub use uri::CredentialedUriDetector;
+pub use value::ValueDetector;
 
 /// Finds sensitive ranges within a single value.
 pub trait Detector: Send + Sync {
@@ -48,6 +58,10 @@ pub trait Detector: Send + Sync {
 pub struct LeafContext<'a> {
     /// The key the value is stored under, if any.
     pub key: Option<&'a str>,
+    /// The keys of the containing objects joined with `.`, ending in the
+    /// value's own key. Empty at the root of a document, and for formats that
+    /// have no keys. Array nesting adds nothing to the path.
+    pub path: &'a str,
     /// Whether an enclosing object looks like connection settings (it has
     /// both a host-like and a user-like key), which makes a bare `password`
     /// key sensitive.
@@ -72,12 +86,18 @@ impl Detection {
     }
 }
 
-/// The detectors enabled by default: everything except PII and user rules.
+/// The detectors enabled by default, using the built-in detection data:
+/// everything except PII and user rules.
 pub fn default_detectors() -> Vec<Box<dyn Detector>> {
+    detectors_from(DetectionData::builtin())
+}
+
+/// The same detectors, taking their vocabulary from `data`.
+pub fn detectors_from(data: &DetectionData) -> Vec<Box<dyn Detector>> {
     vec![
-        Box::new(EntropyDetector::default()),
-        Box::new(RulesetDetector::default_rules().clone()),
-        Box::new(ProviderTokenDetector),
+        Box::new(EntropyDetector::from_data(data)),
+        Box::new(RulesetDetector::default_rules().clone().with_data(data)),
+        Box::new(ProviderTokenDetector::new(data)),
         Box::new(CredentialedUriDetector),
         Box::new(ConnectionStringDetector),
         Box::new(CredentialAssignmentDetector),

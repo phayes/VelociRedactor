@@ -29,8 +29,9 @@ use regex::Regex;
 use regex::bytes::Regex as BytesRegex;
 use serde::Deserialize;
 
+use super::data::DetectionData;
 use super::entropy::shannon_entropy;
-use super::placeholder::is_placeholder;
+use super::placeholder::Placeholders;
 use super::{Detection, Detector, LeafContext};
 use crate::Error;
 
@@ -49,13 +50,17 @@ fn default_toml() -> &'static str {
     std::str::from_utf8(vendored("betterleaks.toml")).expect("bundled ruleset is UTF-8")
 }
 
-/// Comments that mark a line as intentionally containing a secret.
-const ALLOW_SIGNATURES: &[&str] = &["betterleaks:allow", "gitleaks:allow"];
-
 /// Detects secrets using a ruleset. Cloning is cheap.
+///
+/// The rules themselves are shared; the vocabulary that decides which matches
+/// to discard (placeholders, allow-comment signatures) comes from the
+/// configuration and sits beside them, so replacing it does not re-parse the
+/// rules.
 #[derive(Clone)]
 pub struct RulesetDetector {
     inner: Arc<Ruleset>,
+    placeholders: Placeholders,
+    allow_signatures: Arc<[String]>,
 }
 
 impl std::fmt::Debug for RulesetDetector {
@@ -73,6 +78,13 @@ impl RulesetDetector {
             RulesetDetector::from_toml(default_toml()).expect("bundled ruleset is valid")
         });
         &DEFAULT
+    }
+
+    /// The same rules, reading their vocabulary from `data`.
+    pub fn with_data(mut self, data: &DetectionData) -> Self {
+        self.placeholders = Placeholders::new(data);
+        self.allow_signatures = data.get().allow_signatures.clone().into();
+        self
     }
 
     /// A ruleset with no rules.
@@ -107,8 +119,20 @@ impl RulesetDetector {
     fn build(config: RawConfig) -> Result<Self, Error> {
         Ruleset::build(config).map(|inner| Self {
             inner: Arc::new(inner),
+            placeholders: Placeholders::builtin().clone(),
+            allow_signatures: DetectionData::builtin()
+                .get()
+                .allow_signatures
+                .clone()
+                .into(),
         })
     }
+}
+
+/// The vocabulary a scan uses to discard matches.
+struct ScanCtx<'a> {
+    placeholders: &'a Placeholders,
+    allow_signatures: &'a [String],
 }
 
 impl Detector for RulesetDetector {
@@ -117,7 +141,11 @@ impl Detector for RulesetDetector {
     }
 
     fn detect(&self, value: &str, _ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
-        self.inner.detect(value, out);
+        let scan = ScanCtx {
+            placeholders: &self.placeholders,
+            allow_signatures: &self.allow_signatures,
+        };
+        self.inner.detect(value, &scan, out);
     }
 }
 
@@ -381,7 +409,7 @@ impl Ruleset {
         })
     }
 
-    fn detect(&self, value: &str, out: &mut Vec<Detection>) {
+    fn detect(&self, value: &str, scan: &ScanCtx<'_>, out: &mut Vec<Detection>) {
         if value.is_empty() || self.rules.is_empty() {
             return;
         }
@@ -405,7 +433,7 @@ impl Ruleset {
             if !candidates[i] || rule.skip_report {
                 continue;
             }
-            for finding in self.find(i, value, &lines) {
+            for finding in self.find(i, value, &lines, scan) {
                 if seen.insert(finding.secret.clone()) {
                     secrets.push((finding.secret, i));
                 }
@@ -416,7 +444,7 @@ impl Ruleset {
             let Ok(text) = std::str::from_utf8(&secret) else {
                 continue;
             };
-            if is_placeholder(text) {
+            if scan.placeholders.is_placeholder(text) {
                 continue;
             }
             for start in memmem::find_iter(bytes, &secret) {
@@ -430,9 +458,15 @@ impl Ruleset {
     }
 
     /// Findings for one rule, including its component requirements.
-    fn find(&self, rule_index: usize, value: &str, lines: &LineIndex) -> Vec<Finding> {
+    fn find(
+        &self,
+        rule_index: usize,
+        value: &str,
+        lines: &LineIndex,
+        scan: &ScanCtx<'_>,
+    ) -> Vec<Finding> {
         let rule = &self.rules[rule_index];
-        let findings = self.find_primary(rule, value, lines);
+        let findings = self.find_primary(rule, value, lines, scan);
         if rule.components.is_empty() || findings.is_empty() {
             return findings;
         }
@@ -440,7 +474,7 @@ impl Ruleset {
         let component_findings: Vec<Vec<Finding>> = rule
             .components
             .iter()
-            .map(|c| self.find_primary(&self.rules[c.rule], value, lines))
+            .map(|c| self.find_primary(&self.rules[c.rule], value, lines, scan))
             .collect();
 
         findings
@@ -459,7 +493,13 @@ impl Ruleset {
             .collect()
     }
 
-    fn find_primary(&self, rule: &Rule, value: &str, lines: &LineIndex) -> Vec<Finding> {
+    fn find_primary(
+        &self,
+        rule: &Rule,
+        value: &str,
+        lines: &LineIndex,
+        scan: &ScanCtx<'_>,
+    ) -> Vec<Finding> {
         let Some(regex) = &rule.regex else {
             return Vec::new();
         };
@@ -473,7 +513,8 @@ impl Ruleset {
             let start = m.start();
             let end = start + matched.len();
             let line = &bytes[lines.line_range(start, end)];
-            if ALLOW_SIGNATURES
+            if scan
+                .allow_signatures
                 .iter()
                 .any(|sig| memmem::find(line, sig.as_bytes()).is_some())
             {

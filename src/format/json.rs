@@ -1,7 +1,10 @@
-use jsonc_parser::ast::{ObjectPropName, Value};
-use jsonc_parser::{CollectOptions, ParseOptions, parse_to_ast};
+use std::ops::Range;
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use jsonc_parser::ast::{ObjectPropName, Value};
+use jsonc_parser::common::Ranged;
+use jsonc_parser::{CollectOptions, CommentCollectionStrategy, ParseOptions, parse_to_ast};
+
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// JSON, including JSONC and common JSON5 extensions (comments, trailing
 /// commas, single-quoted strings, unquoted keys).
@@ -49,9 +52,13 @@ impl Format for Json {
 
     fn rewrite(&self, input: &[u8], visitor: &mut dyn LeafVisitor) -> Result<Vec<u8>, FormatError> {
         let text = std::str::from_utf8(input).map_err(|e| FormatError::new("json", e))?;
-        let value = parse(text).map_err(|e| FormatError::new("json", e))?;
+        let comments = visitor.wants_comments();
+        let result = parse_with(text, comments).map_err(|e| FormatError::new("json", e))?;
         let mut splicer = Splicer::new(input);
-        if let Some(value) = &value {
+        if let Some(map) = &result.comments {
+            comment::visit(text, &comment_ranges(map), visitor, &mut splicer);
+        }
+        if let Some(value) = &result.value {
             walk(value, None, 0, visitor, &mut splicer);
         }
         Ok(splicer.finish())
@@ -116,7 +123,38 @@ fn starts_like_json(input: &[u8]) -> bool {
 }
 
 fn parse(text: &str) -> Result<Option<Value<'_>>, jsonc_parser::errors::ParseError> {
-    parse_to_ast(text, &CollectOptions::default(), &ParseOptions::default()).map(|r| r.value)
+    parse_with(text, false).map(|r| r.value)
+}
+
+fn parse_with(
+    text: &str,
+    comments: bool,
+) -> Result<jsonc_parser::ParseResult<'_>, jsonc_parser::errors::ParseError> {
+    let collect = CollectOptions {
+        comments: if comments {
+            CommentCollectionStrategy::Separate
+        } else {
+            CommentCollectionStrategy::Off
+        },
+        tokens: false,
+    };
+    parse_to_ast(text, &collect, &ParseOptions::default())
+}
+
+/// The distinct comment ranges of a parsed document, in document order. The
+/// map holds each comment under both the token before and the token after it.
+fn comment_ranges(map: &jsonc_parser::CommentMap<'_>) -> Vec<Range<usize>> {
+    let mut ranges: Vec<Range<usize>> = map
+        .values()
+        .flat_map(|comments| comments.iter())
+        .map(|c| {
+            let range = c.range();
+            range.start..range.end
+        })
+        .collect();
+    ranges.sort_by_key(|r| (r.start, r.end));
+    ranges.dedup();
+    ranges
 }
 
 /// Walk `value`, whose ranges are relative to a slice starting at `base` in

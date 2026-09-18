@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use saphyr_parser::{Event, Parser, ScalarStyle};
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// YAML, including multi-document streams.
 ///
@@ -31,6 +31,14 @@ impl Format for Yaml {
         let text = std::str::from_utf8(input).map_err(|e| FormatError::new("yaml", e))?;
         let documents = parse(text)?;
         let mut splicer = Splicer::new(input);
+        if visitor.wants_comments() {
+            let mut spans = Vec::new();
+            for document in &documents {
+                collect_spans(document, &mut spans);
+            }
+            let ranges = comment::hash_outside(text, &mut spans);
+            comment::visit(text, &ranges, visitor, &mut splicer);
+        }
         for document in &documents {
             walk(document, None, text, visitor, &mut splicer);
         }
@@ -147,6 +155,22 @@ where
             }
             Event::Nothing | Event::StreamStart | Event::DocumentStart(_) => continue,
         }));
+    }
+}
+
+/// The byte ranges of every scalar, so that a `#` inside one is not read as
+/// the start of a comment.
+fn collect_spans(node: &Node<'_>, out: &mut Vec<Range<usize>>) {
+    match node {
+        Node::Scalar { span, .. } => out.push(span.clone()),
+        Node::Sequence(items) => items.iter().for_each(|i| collect_spans(i, out)),
+        Node::Mapping(pairs) => {
+            for (k, v) in pairs {
+                collect_spans(k, out);
+                collect_spans(v, out);
+            }
+        }
+        Node::Alias => {}
     }
 }
 

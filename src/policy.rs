@@ -1,6 +1,8 @@
 //! Rules for which values in structured data are scanned at all.
 
-use crate::detect::credential_key_normalize;
+use std::sync::LazyLock;
+
+use crate::detect::{DetectionData, credential_key_normalize};
 use crate::format::Object;
 
 /// Decides which parts of a structured document are scanned.
@@ -40,31 +42,73 @@ pub struct DefaultPolicy;
 
 impl LeafPolicy for DefaultPolicy {
     fn skip_key(&self, key: &str) -> bool {
-        let lower = key.to_lowercase();
-        lower.ends_with("signature")
-            || lower.ends_with("id")
-            || lower.ends_with("ids")
-            || matches!(
-                lower.as_str(),
-                "filepath" | "file_path" | "cwd" | "root" | "directory" | "dir" | "path"
-            )
+        ConfigPolicy::builtin().skip_key(key)
     }
 
     fn skip_object(&self, object: &Object<'_>) -> bool {
-        object
-            .get_str("type")
-            .is_some_and(|t| t.starts_with("image") || t == "base64")
+        ConfigPolicy::builtin().skip_object(object)
     }
 
     fn credential_context(&self, object: &Object<'_>) -> bool {
+        ConfigPolicy::builtin().credential_context(object)
+    }
+}
+
+/// A policy driven by the `policy` section of a configuration.
+///
+/// [`DefaultPolicy`] is this one, built from the configuration compiled into
+/// the binary.
+#[derive(Debug, Clone)]
+pub struct ConfigPolicy {
+    data: DetectionData,
+}
+
+impl ConfigPolicy {
+    pub fn new(data: &DetectionData) -> Self {
+        Self { data: data.clone() }
+    }
+
+    /// The policy from the configuration built into the binary.
+    pub fn builtin() -> &'static ConfigPolicy {
+        static POLICY: LazyLock<ConfigPolicy> =
+            LazyLock::new(|| ConfigPolicy::new(DetectionData::builtin()));
+        &POLICY
+    }
+}
+
+impl LeafPolicy for ConfigPolicy {
+    fn skip_key(&self, key: &str) -> bool {
+        let policy = &self.data.get().policy;
+        // Only lowercased, deliberately: `file-path` and `file path` are not
+        // the same key as `file_path` here, unlike in `credential_context`.
+        let lower = key.to_lowercase();
+        policy.skip_keys.contains(&lower)
+            || policy
+                .skip_key_suffixes
+                .iter()
+                .any(|suffix| lower.ends_with(suffix))
+    }
+
+    fn skip_object(&self, object: &Object<'_>) -> bool {
+        let policy = &self.data.get().policy;
+        object
+            .get_str(&policy.skip_object_key)
+            .is_some_and(|value| {
+                policy.skip_object_values.contains(value)
+                    || policy
+                        .skip_object_prefixes
+                        .iter()
+                        .any(|prefix| value.starts_with(prefix))
+            })
+    }
+
+    fn credential_context(&self, object: &Object<'_>) -> bool {
+        let policy = &self.data.get().policy;
         let (mut host, mut user) = (false, false);
         for key in object.keys() {
-            match credential_key_normalize(key).as_str() {
-                "host" | "hostname" | "server" | "addr" | "address" | "datasource"
-                | "data_source" => host = true,
-                "user" | "username" | "userid" | "user_id" | "uid" => user = true,
-                _ => {}
-            }
+            let key = credential_key_normalize(key);
+            host |= policy.host_keys.contains(&key);
+            user |= policy.user_keys.contains(&key);
             if host && user {
                 return true;
             }

@@ -1,31 +1,6 @@
-use std::sync::LazyLock;
-
-use regex::Regex;
-
 use super::credential::normalize_key;
+use super::data::DetectionData;
 use super::{Detection, Detector, LeafContext};
-
-/// Candidate tokens. `/` is excluded so whole file paths are not treated as a
-/// single token; high-entropy path segments are still found individually.
-static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9+_=-]{10,}").unwrap());
-
-/// Key segments that mark a structured field as likely holding a secret.
-const SENSITIVE_SEGMENTS: &[&str] = &[
-    "key", "secret", "token", "pass", "password", "passwd", "pwd",
-];
-
-/// Full key names that contain a sensitive segment but are structural, not
-/// credentials. Matched exactly or as a suffix (`user_foreign_key`).
-const STRUCTURAL_KEYS: &[&str] = &[
-    "foreign_key",
-    "primary_key",
-    "sort_key",
-    "partition_key",
-    "lookup_key",
-    "cache_key",
-    "public_key",
-    "idempotency_key",
-];
 
 /// Flags long alphanumeric tokens whose Shannon entropy exceeds a threshold.
 ///
@@ -37,7 +12,7 @@ const STRUCTURAL_KEYS: &[&str] = &[
 /// `token`, …), [`sensitive_threshold`](Self::sensitive_threshold) is used
 /// instead so hex digests and other medium-entropy secrets are still caught.
 /// Structural keys such as `foreign_key` keep [`threshold`](Self::threshold).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct EntropyDetector {
     /// Bits-per-byte required for tokens with no sensitive key.
     pub threshold: f64,
@@ -45,6 +20,8 @@ pub struct EntropyDetector {
     /// field. Below the hex-alphabet ceiling of 4.0 so MD5/SHA-shaped values
     /// qualify.
     pub sensitive_threshold: f64,
+    /// The key vocabulary and token pattern to use.
+    data: DetectionData,
 }
 
 impl EntropyDetector {
@@ -53,10 +30,22 @@ impl EntropyDetector {
     /// Default [`sensitive_threshold`](Self::sensitive_threshold).
     pub const SENSITIVE_THRESHOLD: f64 = 3.5;
 
+    /// A detector with the given thresholds and the built-in key vocabulary.
     pub fn new(threshold: f64, sensitive_threshold: f64) -> Self {
         Self {
             threshold,
             sensitive_threshold,
+            data: DetectionData::builtin().clone(),
+        }
+    }
+
+    /// A detector taking its thresholds and vocabulary from `data`.
+    pub fn from_data(data: &DetectionData) -> Self {
+        let entropy = &data.get().entropy;
+        Self {
+            threshold: entropy.threshold,
+            sensitive_threshold: entropy.sensitive_threshold,
+            data: data.clone(),
         }
     }
 
@@ -81,15 +70,17 @@ impl Detector for EntropyDetector {
     }
 
     fn detect(&self, value: &str, ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
-        let sensitive = ctx.key.is_some_and(is_sensitive_key);
+        let entropy = &self.data.get().entropy;
+        let sensitive = ctx.key.is_some_and(|key| self.is_sensitive_key(key));
         let threshold = if sensitive {
             self.sensitive_threshold
         } else {
             self.threshold
         };
-        for m in TOKEN.find_iter(value) {
+        for m in entropy.token.find_iter(value) {
             let token = m.as_str();
-            if shannon_entropy(token.as_bytes()) > threshold || (sensitive && is_hex_digest(token))
+            if shannon_entropy(token.as_bytes()) > threshold
+                || (sensitive && self.is_hex_digest(token))
             {
                 out.push(Detection::new(m.range(), self.name()));
             }
@@ -97,20 +88,38 @@ impl Detector for EntropyDetector {
     }
 }
 
-/// Whether `key` names a field that is likely to hold a secret.
-fn is_sensitive_key(key: &str) -> bool {
-    let normalized = normalize_key(&split_camel(key));
-    if STRUCTURAL_KEYS.iter().any(|name| {
-        normalized == *name
-            || normalized
-                .strip_suffix(name)
-                .is_some_and(|prefix| prefix.ends_with('_'))
-    }) {
-        return false;
+impl EntropyDetector {
+    /// Whether `key` names a field that is likely to hold a secret.
+    fn is_sensitive_key(&self, key: &str) -> bool {
+        let entropy = &self.data.get().entropy;
+        // The camelCase split has to come first: normalizing lowercases the
+        // key, after which `apiKey` is one segment instead of two.
+        let normalized = normalize_key(&split_camel(key));
+        // A structural key vetoes the segment scan below, where `public_key`
+        // would otherwise match on `key`.
+        if entropy.structural_keys.iter().any(|name| {
+            normalized == *name
+                || normalized
+                    .strip_suffix(name)
+                    .is_some_and(|prefix| prefix.ends_with('_'))
+        }) {
+            return false;
+        }
+        // Whole segments, not substrings, so `keyboard` is not sensitive.
+        normalized
+            .split('_')
+            .any(|seg| entropy.sensitive_segments.contains(seg))
     }
-    normalized
-        .split('_')
-        .any(|seg| SENSITIVE_SEGMENTS.contains(&seg))
+
+    /// An MD5, SHA-1, or SHA-256 hex digest, any case.
+    fn is_hex_digest(&self, token: &str) -> bool {
+        self.data
+            .get()
+            .entropy
+            .hex_digest_lengths
+            .contains(&token.len())
+            && token.bytes().all(|b| b.is_ascii_hexdigit())
+    }
 }
 
 /// Insert `_` at camelCase boundaries so `apiKey` and `foreignKey` tokenize
@@ -129,11 +138,6 @@ fn split_camel(key: &str) -> String {
         out.push(c);
     }
     out
-}
-
-/// MD5 (32), SHA-1 (40), or SHA-256 (64) hex digest, any case.
-fn is_hex_digest(token: &str) -> bool {
-    matches!(token.len(), 32 | 40 | 64) && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Shannon entropy of `bytes`, in bits per byte.
@@ -161,6 +165,11 @@ mod tests {
     use super::*;
 
     const HEX: &str = "b65cc3551e470d5abe2448d41429daa2";
+
+    /// A detector with the built-in vocabulary.
+    fn d() -> EntropyDetector {
+        EntropyDetector::default()
+    }
 
     fn detect(s: &str) -> Vec<&str> {
         detect_key(None, s)
@@ -245,7 +254,7 @@ mod tests {
             "passwd",
             "mysql.root.password",
         ] {
-            assert!(is_sensitive_key(key), "{key} should be sensitive");
+            assert!(d().is_sensitive_key(key), "{key} should be sensitive");
         }
         for key in [
             "note",
@@ -257,17 +266,17 @@ mod tests {
             "idempotency_key",
             "keyboard",
         ] {
-            assert!(!is_sensitive_key(key), "{key} should not be sensitive");
+            assert!(!d().is_sensitive_key(key), "{key} should not be sensitive");
         }
     }
 
     #[test]
     fn hex_digest_lengths() {
-        assert!(is_hex_digest(HEX));
-        assert!(is_hex_digest(&"a".repeat(40)));
-        assert!(is_hex_digest(&"A".repeat(64)));
-        assert!(!is_hex_digest(&"a".repeat(31)));
-        assert!(!is_hex_digest(&"g".repeat(32)));
+        assert!(d().is_hex_digest(HEX));
+        assert!(d().is_hex_digest(&"a".repeat(40)));
+        assert!(d().is_hex_digest(&"A".repeat(64)));
+        assert!(!d().is_hex_digest(&"a".repeat(31)));
+        assert!(!d().is_hex_digest(&"g".repeat(32)));
     }
 
     #[test]

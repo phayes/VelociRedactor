@@ -98,6 +98,7 @@ mod tests {
         let ctx = LeafContext {
             key: Some(key),
             credential_context,
+            ..LeafContext::default()
         };
         CredentialKeyDetector.detect(value, &ctx, &mut out);
         !out.is_empty()

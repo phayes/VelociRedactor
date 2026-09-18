@@ -5,12 +5,14 @@ use std::sync::Arc;
 
 use crate::Error;
 use crate::detect::{
-    self, Detection, Detector, EntropyDetector, LeafContext, Pii, RulesetDetector,
+    self, Detection, DetectionData, Detector, EntropyDetector, LeafContext, PathDetector, Pii,
+    RulesetDetector,
 };
 use crate::format::{
-    Container, Edit, Format, FormatRegistry, Leaf, LeafVisitor, Replacement, apply_edits,
+    Container, Edit, Format, FormatRegistry, Leaf, LeafKind, LeafVisitor, Replacement, apply_edits,
 };
-use crate::policy::{DefaultPolicy, LeafPolicy};
+use crate::glob::{Glob, any_match};
+use crate::policy::{ConfigPolicy, DefaultPolicy, LeafPolicy};
 use crate::render::{self, Allow};
 
 /// Configures a [`Redactor`].
@@ -25,6 +27,12 @@ pub struct RedactorBuilder {
     pii: Vec<Pii>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
+    /// The detection vocabulary, kept for the detectors built in `build`.
+    data: DetectionData,
+    comments: bool,
+    allow_paths: Vec<Glob>,
+    disallow_paths: Vec<String>,
+    exclude: Vec<Glob>,
 }
 
 impl Default for RedactorBuilder {
@@ -42,29 +50,40 @@ impl RedactorBuilder {
             pii: Vec::new(),
             formats: FormatRegistry::text_only(),
             policy: Arc::new(DefaultPolicy),
+            data: DetectionData::builtin().clone(),
+            comments: false,
+            allow_paths: Vec::new(),
+            disallow_paths: Vec::new(),
+            exclude: Vec::new(),
         }
     }
 
     /// Add the built-in secret detectors (including the bundled ruleset), all
     /// formats compiled into this build, and the default policy. PII
     /// detection stays off; enable it with [`pii`](Self::pii).
-    pub fn defaults(mut self) -> Self {
-        for detector in detect::default_detectors() {
-            match detector.name() {
-                "ruleset" => {
-                    self.ruleset
-                        .get_or_insert_with(|| RulesetDetector::default_rules().clone());
-                }
-                "entropy" => {
-                    self.entropy.get_or_insert_with(EntropyDetector::default);
-                }
-                _ => self.detectors.push(detector),
-            }
-        }
+    pub fn defaults(self) -> Self {
+        self.defaults_from(DetectionData::builtin())
+    }
+
+    /// The same, with the detection vocabulary taken from `data` instead of
+    /// the configuration built into the binary.
+    pub fn defaults_from(mut self, data: &DetectionData) -> Self {
+        // The entropy detector and the ruleset get their own slots, so that
+        // `entropy_threshold` and `ruleset` can replace them afterwards.
+        self.entropy
+            .get_or_insert_with(|| EntropyDetector::from_data(data));
+        self.ruleset
+            .get_or_insert_with(|| RulesetDetector::default_rules().clone().with_data(data));
+        self.detectors.extend(
+            detect::detectors_from(data)
+                .into_iter()
+                .filter(|d| !matches!(d.name(), "entropy" | "ruleset")),
+        );
         for format in crate::format::builtin() {
             self.formats.register(format);
         }
-        self.policy = Arc::new(DefaultPolicy);
+        self.policy = Arc::new(ConfigPolicy::new(data));
+        self.data = data.clone();
         self
     }
 
@@ -108,6 +127,46 @@ impl RedactorBuilder {
         self
     }
 
+    /// Scan comments as well as values, in formats that have them.
+    ///
+    /// Comments are off by default: they are prose, and scanning them costs
+    /// false positives.
+    pub fn comments(mut self, comments: bool) -> Self {
+        self.comments = comments;
+        self
+    }
+
+    /// Never redact values whose key path matches one of these globs. Such
+    /// values are not scanned at all, so they never become findings.
+    ///
+    /// See [`Glob::new`](crate::Glob::new) for the pattern syntax.
+    pub fn allow_paths(mut self, patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.allow_paths
+            .extend(patterns.into_iter().map(|p| Glob::new(p.as_ref())));
+        self
+    }
+
+    /// Always redact values whose key path matches one of these globs,
+    /// whatever they contain. They are reported by the `path` detector.
+    pub fn disallow_paths(mut self, patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.disallow_paths
+            .extend(patterns.into_iter().map(|p| p.as_ref().to_owned()));
+        self
+    }
+
+    /// Ignore detectors whose name, or whose reported label, matches one of
+    /// these globs, such as `entropy`, `pii:*`, or `ruleset:aws-*`.
+    ///
+    /// The patterns have no separator; see [`Glob::flat`](crate::Glob::flat).
+    pub fn exclude_detectors(
+        mut self,
+        patterns: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Self {
+        self.exclude
+            .extend(patterns.into_iter().map(|p| Glob::flat(p.as_ref())));
+        self
+    }
+
     /// Set the entropy threshold for tokens that are not under a sensitive
     /// key (default [`EntropyDetector::DEFAULT_THRESHOLD`]).
     ///
@@ -138,11 +197,22 @@ impl RedactorBuilder {
         if let Some(ruleset) = self.ruleset {
             detectors.push(Box::new(ruleset));
         }
-        detectors.extend(self.pii.into_iter().map(Pii::detector));
+        detectors.extend(
+            self.pii
+                .into_iter()
+                .map(|category| category.detector_from(&self.data)),
+        );
+        let paths = PathDetector::new(self.disallow_paths);
+        if !paths.is_empty() {
+            detectors.push(Box::new(paths));
+        }
         Redactor {
             detectors: detectors.into(),
             formats: self.formats,
             policy: self.policy,
+            comments: self.comments,
+            allow_paths: self.allow_paths.into(),
+            exclude: self.exclude.into(),
         }
     }
 }
@@ -168,6 +238,9 @@ pub struct Redactor {
     detectors: Arc<[Box<dyn Detector>]>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
+    comments: bool,
+    allow_paths: Arc<[Glob]>,
+    exclude: Arc<[Glob]>,
 }
 
 impl Default for Redactor {
@@ -234,13 +307,13 @@ impl Redactor {
         };
 
         let mut warnings = Vec::new();
-        let mut collector = Collector::new(self.policy.as_ref());
+        let mut collector = self.collector();
         let format = match format.rewrite(input, &mut collector) {
             Ok(_) => format,
             Err(err) if !explicit => {
                 warnings.push(format!("{err}; treating input as plain text"));
                 let text = self.formats.text();
-                collector = Collector::new(self.policy.as_ref());
+                collector = self.collector();
                 text.rewrite(input, &mut collector)?;
                 text
             }
@@ -251,6 +324,7 @@ impl Redactor {
         let mut redaction = Redaction {
             input,
             format,
+            comments: self.comments,
             leaves: HashMap::new(),
             findings: Vec::new(),
             warnings,
@@ -259,15 +333,26 @@ impl Redactor {
         Ok(redaction)
     }
 
+    fn collector(&self) -> Collector<'_> {
+        Collector::new(self.policy.as_ref(), &self.allow_paths, self.comments)
+    }
+
     fn detect_all(&self, leaves: &[CollectedLeaf]) -> Vec<Vec<Detection>> {
         let run = |leaf: &CollectedLeaf| {
             let ctx = LeafContext {
                 key: leaf.key.as_deref(),
+                path: &leaf.path,
                 credential_context: leaf.credential_context,
             };
             let mut out = Vec::new();
             for detector in self.detectors.iter() {
+                if any_match(&self.exclude, detector.name()) {
+                    continue;
+                }
                 detector.detect(&leaf.value, &ctx, &mut out);
+            }
+            if !self.exclude.is_empty() {
+                out.retain(|d| !any_match(&self.exclude, &d.label));
             }
             render::merge(&leaf.value, out)
         };
@@ -287,6 +372,7 @@ impl Redactor {
 pub struct Redaction<'a> {
     input: &'a [u8],
     format: Arc<dyn Format>,
+    comments: bool,
     /// Redacted ranges and the index of their finding, by leaf index.
     leaves: HashMap<usize, Vec<(Range<usize>, usize)>>,
     findings: Vec<Finding>,
@@ -307,6 +393,10 @@ pub struct Finding {
     pub len: usize,
     /// Field (object key) of the value containing the first occurrence, if any.
     pub field: Option<String>,
+    /// Key path of the value containing the first occurrence: the keys of the
+    /// enclosing objects and the field itself, joined with `.`. `None` for
+    /// values that have no key, such as the text of a plain-text file.
+    pub path: Option<String>,
     /// Byte offsets of every occurrence in the input, ascending, when the
     /// format reports value positions. Approximate for values containing
     /// escape sequences.
@@ -364,6 +454,7 @@ impl Redaction<'_> {
         let mut visitor = Renderer {
             leaves: &self.leaves,
             tokens: &tokens,
+            comments: self.comments,
             index: 0,
         };
         Ok(self.format.rewrite(self.input, &mut visitor)?)
@@ -385,6 +476,7 @@ impl Redaction<'_> {
                         detector: detection.label,
                         len: text.len(),
                         field: leaf.key.clone(),
+                        path: (!leaf.path.is_empty()).then(|| leaf.path.clone()),
                         offsets: Vec::new(),
                         occurrences: 0,
                     });
@@ -428,6 +520,7 @@ struct CollectedLeaf {
     index: usize,
     value: String,
     key: Option<String>,
+    path: String,
     credential_context: bool,
     offset: Option<usize>,
 }
@@ -436,21 +529,30 @@ struct CollectedLeaf {
 struct Frame {
     skipped: bool,
     credential_context: bool,
+    /// Length of the collector's path before this container was entered.
+    path_len: usize,
 }
 
-/// Records every scannable leaf, applying the policy.
+/// Records every scannable leaf, applying the policy and the allowed paths.
 struct Collector<'p> {
     policy: &'p dyn LeafPolicy,
+    allow_paths: &'p [Glob],
+    comments: bool,
     stack: Vec<Frame>,
+    /// Key path of the container currently being visited.
+    path: String,
     index: usize,
     leaves: Vec<CollectedLeaf>,
 }
 
 impl<'p> Collector<'p> {
-    fn new(policy: &'p dyn LeafPolicy) -> Self {
+    fn new(policy: &'p dyn LeafPolicy, allow_paths: &'p [Glob], comments: bool) -> Self {
         Self {
             policy,
+            allow_paths,
+            comments,
             stack: Vec::new(),
+            path: String::new(),
             index: 0,
             leaves: Vec::new(),
         }
@@ -460,17 +562,36 @@ impl<'p> Collector<'p> {
         self.stack.last().copied().unwrap_or(Frame {
             skipped: false,
             credential_context: false,
+            path_len: 0,
         })
     }
 }
 
+/// Append `key` as the next segment of `path`.
+fn push_segment(path: &mut String, key: &str) {
+    if !path.is_empty() {
+        path.push('.');
+    }
+    path.push_str(key);
+}
+
 impl LeafVisitor for Collector<'_> {
+    fn wants_comments(&self) -> bool {
+        self.comments
+    }
+
     fn enter(&mut self, key: Option<&str>, container: Container<'_, '_>) {
         let parent = self.top();
+        let path_len = self.path.len();
+        if let Some(key) = key {
+            push_segment(&mut self.path, key);
+        }
         let mut frame = Frame {
             skipped: parent.skipped || key.is_some_and(|k| self.policy.skip_key(k)),
             credential_context: parent.credential_context,
+            path_len,
         };
+        frame.skipped |= any_match(self.allow_paths, &self.path);
         if let Container::Object(object) = container {
             frame.skipped |= self.policy.skip_object(object);
             frame.credential_context |= self.policy.credential_context(object);
@@ -479,23 +600,37 @@ impl LeafVisitor for Collector<'_> {
     }
 
     fn exit(&mut self) {
-        self.stack.pop();
+        if let Some(frame) = self.stack.pop() {
+            self.path.truncate(frame.path_len);
+        }
     }
 
     fn leaf(&mut self, leaf: &Leaf<'_>) -> Option<Replacement> {
         let index = self.index;
         self.index += 1;
         let frame = self.top();
-        if frame.skipped || leaf.key.is_some_and(|k| self.policy.skip_key(k)) {
+        if frame.skipped
+            || (leaf.kind == LeafKind::Comment && !self.comments)
+            || leaf.key.is_some_and(|k| self.policy.skip_key(k))
+        {
             return None;
         }
-        self.leaves.push(CollectedLeaf {
-            index,
-            value: leaf.value.to_owned(),
-            key: leaf.key.map(str::to_owned),
-            credential_context: frame.credential_context,
-            offset: leaf.offset,
-        });
+
+        let base = self.path.len();
+        if let Some(key) = leaf.key {
+            push_segment(&mut self.path, key);
+        }
+        if !any_match(self.allow_paths, &self.path) {
+            self.leaves.push(CollectedLeaf {
+                index,
+                value: leaf.value.to_owned(),
+                key: leaf.key.map(str::to_owned),
+                path: self.path.clone(),
+                credential_context: frame.credential_context,
+                offset: leaf.offset,
+            });
+        }
+        self.path.truncate(base);
         None
     }
 }
@@ -505,10 +640,15 @@ struct Renderer<'r> {
     leaves: &'r HashMap<usize, Vec<(Range<usize>, usize)>>,
     /// The token for each finding, or `None` if it is allowed.
     tokens: &'r [Option<String>],
+    comments: bool,
     index: usize,
 }
 
 impl LeafVisitor for Renderer<'_> {
+    fn wants_comments(&self) -> bool {
+        self.comments
+    }
+
     fn enter(&mut self, _key: Option<&str>, _container: Container<'_, '_>) {}
 
     fn exit(&mut self) {}

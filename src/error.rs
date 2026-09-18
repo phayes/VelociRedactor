@@ -19,6 +19,10 @@ pub enum Error {
     #[error("rule pack: {0}")]
     Pack(String),
 
+    /// A configuration file could not be read or understood.
+    #[error("config: {0}")]
+    Config(String),
+
     /// The input could not be processed as the requested format.
     #[error(transparent)]
     Format(#[from] FormatError),

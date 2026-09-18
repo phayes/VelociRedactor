@@ -1,6 +1,6 @@
 use java_properties::{LineContent, PropertiesIter};
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// Java `.properties` files.
 #[derive(Debug, Clone, Copy, Default)]
@@ -38,8 +38,11 @@ impl Format for Properties {
             .iter()
             .map(|(_, k, v)| (k.as_str(), Some(v.as_str())))
             .collect();
-        visitor.enter(None, Container::Object(&summary));
         let mut splicer = Splicer::new(input);
+        if visitor.wants_comments() {
+            comment::visit(text, &comment::properties(text), visitor, &mut splicer);
+        }
+        visitor.enter(None, Container::Object(&summary));
         for (number, key, value) in &pairs {
             let Some(&line_start) = line_starts.get(number.saturating_sub(1)) else {
                 continue;

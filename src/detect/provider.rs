@@ -1,7 +1,4 @@
-use std::sync::LazyLock;
-
-use regex::Regex;
-
+use super::data::DetectionData;
 use super::{Detection, Detector, LeafContext};
 
 /// Credential formats identified purely by prefix and length, independent of
@@ -17,16 +14,23 @@ use super::{Detection, Detector, LeafContext};
 /// preceding identifier (`FOO_sb_secret_…`) is still found. The cost is that
 /// long identifiers that merely start with a prefix, such as
 /// `sb_secret_key_rotation_handler`, are also redacted.
-static PATTERNS: LazyLock<[Regex; 2]> = LazyLock::new(|| {
-    [
-        Regex::new(r"sb_secret_[A-Za-z0-9_-]{20,}").unwrap(),
-        Regex::new(r"sbp_[a-z0-9_-]{20,}").unwrap(),
-    ]
-});
-
 /// Detects provider tokens with fixed prefixes.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ProviderTokenDetector;
+#[derive(Debug, Clone)]
+pub struct ProviderTokenDetector {
+    data: DetectionData,
+}
+
+impl ProviderTokenDetector {
+    pub fn new(data: &DetectionData) -> Self {
+        Self { data: data.clone() }
+    }
+}
+
+impl Default for ProviderTokenDetector {
+    fn default() -> Self {
+        Self::new(DetectionData::builtin())
+    }
+}
 
 impl Detector for ProviderTokenDetector {
     fn name(&self) -> &str {
@@ -34,7 +38,7 @@ impl Detector for ProviderTokenDetector {
     }
 
     fn detect(&self, value: &str, _ctx: &LeafContext<'_>, out: &mut Vec<Detection>) {
-        for pattern in PATTERNS.iter() {
+        for pattern in &self.data.get().provider_patterns {
             for m in pattern.find_iter(value) {
                 out.push(Detection::new(m.range(), self.name()));
             }

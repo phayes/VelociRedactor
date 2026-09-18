@@ -24,7 +24,7 @@ fn email_pattern() {
         "first.last@company.org",
         "a@b.com",
     ] {
-        assert_eq!(matches(&EmailDetector, s), [s], "{s}");
+        assert_eq!(matches(&EmailDetector::default(), s), [s], "{s}");
     }
     for s in [
         "not an email",
@@ -33,9 +33,12 @@ fn email_pattern() {
         "no-at-sign-here",
         "",
     ] {
-        assert!(matches(&EmailDetector, s).is_empty(), "{s}");
+        assert!(matches(&EmailDetector::default(), s).is_empty(), "{s}");
     }
-    assert_eq!(matches(&EmailDetector, "a@b.com and c@d.org").len(), 2);
+    assert_eq!(
+        matches(&EmailDetector::default(), "a@b.com and c@d.org").len(),
+        2
+    );
 }
 
 #[test]
@@ -84,7 +87,7 @@ fn address_pattern() {
 #[test]
 fn detectors_report_their_category() {
     let mut out = Vec::new();
-    EmailDetector.detect(
+    EmailDetector::default().detect(
         "contact user@example.com for info",
         &LeafContext::default(),
         &mut out,
@@ -108,13 +111,13 @@ fn allowlisted_emails_are_not_pii() {
         "Noreply@GitHub.com",
     ] {
         assert!(
-            matches(&EmailDetector, &format!("from {email} to")).is_empty(),
+            matches(&EmailDetector::default(), &format!("from {email} to")).is_empty(),
             "{email}"
         );
     }
     let git_log =
         "Author: Bot <noreply@github.com>\nCo-Authored-By: User <user@users.noreply.github.com>";
-    assert!(matches(&EmailDetector, git_log).is_empty());
+    assert!(matches(&EmailDetector::default(), git_log).is_empty());
 }
 
 #[test]

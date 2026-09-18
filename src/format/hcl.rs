@@ -4,7 +4,7 @@ use hcl_edit::structure::{Block, BlockLabel, Body, Structure};
 use hcl_edit::template::HeredocTemplate;
 use hcl_edit::visit::{self, Visit};
 
-use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer};
+use super::{Container, Format, FormatError, Leaf, LeafVisitor, Object, Splicer, comment};
 
 /// HCL, including Terraform and Nomad files.
 ///
@@ -31,9 +31,13 @@ impl Format for Hcl {
     fn rewrite(&self, input: &[u8], visitor: &mut dyn LeafVisitor) -> Result<Vec<u8>, FormatError> {
         let text = std::str::from_utf8(input).map_err(|e| FormatError::new("hcl", e))?;
         let body = hcl_edit::parser::parse_body(text).map_err(|e| FormatError::new("hcl", e))?;
+        let mut splicer = Splicer::new(input);
+        if visitor.wants_comments() {
+            comment::visit(text, &comment::hcl(text), visitor, &mut splicer);
+        }
         let mut walker = Walker {
             visitor,
-            splicer: Splicer::new(input),
+            splicer,
             key: None,
             in_heredoc: false,
         };
