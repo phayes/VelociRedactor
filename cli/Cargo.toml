@@ -9,6 +9,7 @@ repository = "https://github.com/phayes/velociredactor"
 homepage = "https://github.com/phayes/velociredactor"
 keywords = ["redaction", "secrets", "pii", "gitleaks", "security"]
 categories = ["command-line-utilities", "text-processing"]
+readme = "../README.md"
 
 [features]
 # Run the privacy_filter model on an NVIDIA GPU. Needs the CUDA toolkit.
