@@ -10,6 +10,13 @@ Structured format support preserves keys and formatting while replacing values. 
 
 The [CLI README](README.md) covers the command-line program, installation, and command reference.
 
+Velociredactor aims:
+ - *Fast*, with parallel scanning and a very fast regex engine.
+ - *Exaustive*, with built-in support for all [Betterleaks](https://betterleaks.com) secret patterns, and optional support for [OpenAI's Privacy Filter](https://openai.com/index/introducing-openai-privacy-filter/).
+ - *Configurable* with extensive configuration options.
+ - *Extensible* with a matching [rust crate](https://crates.io/crates/velociredactor) and traits. 
+ - *AI Native* with built-in LLM skills so AI models can automatically start using `velociredactor` to avoid reading sensitive data into context.
+
 ## Quick start
 
 Add the crate to a project:
