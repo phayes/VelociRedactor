@@ -8,6 +8,7 @@ use super::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 pub struct Text;
 
 impl Text {
+    /// The format name used by registries and format hints.
     pub const NAME: &'static str = "text";
 }
 

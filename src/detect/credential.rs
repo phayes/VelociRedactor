@@ -34,6 +34,7 @@ pub struct CredentialAssignmentDetector {
 }
 
 impl CredentialAssignmentDetector {
+    /// Build a detector using the supplied placeholder vocabulary.
     pub fn new(placeholders: &Placeholders) -> Self {
         Self {
             placeholders: placeholders.clone(),
@@ -70,6 +71,7 @@ pub struct CredentialKeyDetector {
 }
 
 impl CredentialKeyDetector {
+    /// Build a detector using the supplied placeholder vocabulary.
     pub fn new(placeholders: &Placeholders) -> Self {
         Self {
             placeholders: placeholders.clone(),

@@ -170,7 +170,7 @@ detectors:
       # binary. Anything else is a path to a betterleaks/gitleaks TOML file,
       # relative to this config file.
       rules:
-        - builtin:betterleaks
+        - builtin:betterleaks # See https://github.com/phayes/velociredactor/blob/master/vendor/betterleaks/betterleaks.toml
         # - ./my-rules.toml
 
       # Comments marking a line as intentionally containing a secret. Matched

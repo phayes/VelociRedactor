@@ -13,23 +13,17 @@ use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor};
 
 /// Redact secrets and personal data from files.
 ///
-/// Each redacted value becomes a token `REDACTION-N`, where `N` numbers
-/// distinct secrets in order of first appearance. Equal values share a
-/// number.
+/// Each redacted value becomes a token `REDACTION-N`, where `N` numbers distinct secrets in order of first appearance.
+/// Equal values share a number.
 ///
-/// What counts as a secret is configuration, not command line: the options
-/// here say how to apply the rules, and `velociredactor config show` prints the
-/// rules that are built in. Write your own by editing a copy of them:
+/// Configuration defines what counts as a secret.
+/// `velociredactor config show` prints the built-in rules as a starting point:
 ///
 ///     velociredactor config show > velociredactor.yml
 ///     velociredactor redact secrets.json
 ///
-/// Configuration is chosen in this order: `--config`, then
-/// `$VELOCIREDACTOR_CONFIG`, then a `velociredactor.yml` or
-/// `VELOCIREDACTOR.yml` found in the current directory or a parent (stopping
-/// at a git repository root — a `.git` file or directory — the home
-/// directory when running inside it, or the filesystem root), then the
-/// built-in configuration.
+/// Configuration is chosen in this order: `--config`, `$VELOCIREDACTOR_CONFIG`, a discovered `velociredactor.yml` or `VELOCIREDACTOR.yml`, and the built-in configuration.
+/// Discovery stops at a Git repository root, the home directory when running inside it, or the filesystem root.
 #[derive(Debug, Parser)]
 #[command(version, about, long_about)]
 struct Cli {
@@ -45,6 +39,8 @@ enum Command {
     List(ListArgs),
     /// List the supported input formats.
     Formats,
+    /// Print the complete command-line manual.
+    Man,
     /// Inspect or check a configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
@@ -66,6 +62,15 @@ enum ConfigCommand {
 /// Environment variable naming a configuration file that replaces the
 /// built-in one when `--config` is omitted.
 const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
+
+/// The complete command-line manual embedded in the binary.
+const CLI_README: &str = include_str!("../../README.md");
+
+/// The README logo markup omitted from terminal output.
+const CLI_README_LOGO: &str = concat!(
+    r#"<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="velociredactor logo" width="420"></p>"#,
+    "\n\n"
+);
 
 /// Names accepted for a discovered configuration file, in preference order.
 const CONFIG_FILE_NAMES: [&str; 2] = ["velociredactor.yml", "VELOCIREDACTOR.yml"];
@@ -204,6 +209,7 @@ fn main() -> ExitCode {
         Command::Redact(args) => redact(args),
         Command::List(args) => list(args),
         Command::Formats => formats(),
+        Command::Man => man(),
         Command::Config(ConfigCommand::Show(args)) => show_config(&args),
         Command::Config(ConfigCommand::Location(args)) => locate_config(&args),
         Command::Config(ConfigCommand::Validate(args)) => validate_config(&args),
@@ -458,6 +464,15 @@ fn formats() -> Result<ExitCode> {
     for format in redactor.formats().iter() {
         println!("{:<12} {}", format.name(), format.extensions().join(", "));
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print the complete command-line manual.
+fn man() -> Result<ExitCode> {
+    let manual = CLI_README.replacen(CLI_README_LOGO, "", 1);
+    io::stdout()
+        .write_all(manual.as_bytes())
+        .context("writing standard output")?;
     Ok(ExitCode::SUCCESS)
 }
 

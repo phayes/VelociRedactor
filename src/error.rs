@@ -9,7 +9,12 @@ pub enum Error {
 
     /// A user-supplied pattern failed to compile.
     #[error("invalid pattern for {name:?}: {message}")]
-    InvalidPattern { name: String, message: String },
+    InvalidPattern {
+        /// The detector or setting that owns the pattern.
+        name: String,
+        /// The sanitized compilation error.
+        message: String,
+    },
 
     /// A ruleset file could not be loaded.
     #[error("ruleset: {0}")]
@@ -22,12 +27,18 @@ pub enum Error {
     /// A detector failed while looking at the input, so the input cannot be
     /// said to be clean.
     #[error("{name}: {message}")]
-    Detector { name: String, message: String },
+    Detector {
+        /// The detector that failed.
+        name: String,
+        /// The detector's error message.
+        message: String,
+    },
 
     /// The input could not be processed as the requested format.
     #[error(transparent)]
     Format(#[from] FormatError),
 
+    /// Reading or writing bytes failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -41,6 +52,7 @@ pub struct FormatError {
 }
 
 impl FormatError {
+    /// Create an error for `format` from a displayable message.
     pub fn new(format: impl Into<String>, message: impl fmt::Display) -> Self {
         Self {
             format: format.into(),
@@ -53,6 +65,7 @@ impl FormatError {
         &self.format
     }
 
+    /// The parser or serializer error message.
     pub fn message(&self) -> &str {
         &self.message
     }

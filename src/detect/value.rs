@@ -43,6 +43,7 @@ impl ValueDetector {
         })
     }
 
+    /// Whether the detector has no nonempty values to match.
     pub fn is_empty(&self) -> bool {
         self.matcher.is_none()
     }

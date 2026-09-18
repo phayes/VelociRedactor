@@ -198,6 +198,7 @@ impl RulesetDetector {
         Self::build(config)
     }
 
+    /// Read and compile a ruleset from a TOML file.
     pub fn from_path(path: &Path) -> Result<Self, Error> {
         let source = std::fs::read_to_string(path)
             .map_err(|err| Error::Ruleset(format!("{}: {err}", path.display())))?;

@@ -31,6 +31,7 @@ pub struct CredentialedUriDetector {
 }
 
 impl CredentialedUriDetector {
+    /// Build a detector using the supplied placeholder vocabulary.
     pub fn new(placeholders: &Placeholders) -> Self {
         Self {
             placeholders: placeholders.clone(),

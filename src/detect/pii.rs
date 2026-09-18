@@ -66,6 +66,7 @@ pub struct EmailDetector {
 }
 
 impl EmailDetector {
+    /// Build an email detector with the configured automation-address allowlist.
     pub fn new(config: &EmailConfig) -> Self {
         Self {
             allowlist: config

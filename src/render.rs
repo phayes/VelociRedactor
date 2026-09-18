@@ -56,6 +56,7 @@ impl Allow {
         Self::none().with_regexes(patterns)
     }
 
+    /// Add exact secret values to this allow list.
     pub fn with_values<S: Into<String>>(mut self, values: impl IntoIterator<Item = S>) -> Self {
         self.values.extend(values.into_iter().map(Into::into));
         self

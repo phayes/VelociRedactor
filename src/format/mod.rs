@@ -149,6 +149,7 @@ pub struct Leaf<'a> {
 }
 
 impl<'a> Leaf<'a> {
+    /// Create a document-value leaf without key or offset metadata.
     pub fn new(value: &'a str) -> Self {
         Self {
             value,
@@ -166,11 +167,13 @@ impl<'a> Leaf<'a> {
         }
     }
 
+    /// Set the key that directly contains this value.
     pub fn with_key(mut self, key: Option<&'a str>) -> Self {
         self.key = key;
         self
     }
 
+    /// Set the byte offset where this value's text starts in the input.
     pub fn with_offset(mut self, offset: usize) -> Self {
         self.offset = Some(offset);
         self
@@ -187,14 +190,17 @@ pub struct Object<'a> {
 }
 
 impl<'a> Object<'a> {
+    /// Create an empty object summary.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add a field and its value when that value is a string.
     pub fn push(&mut self, key: &'a str, string_value: Option<&'a str>) {
         self.fields.push((key, string_value));
     }
 
+    /// Iterate over field keys in document order.
     pub fn keys(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.fields.iter().map(|(k, _)| *k)
     }
@@ -220,7 +226,9 @@ impl<'a> FromIterator<(&'a str, Option<&'a str>)> for Object<'a> {
 /// A container being entered during a walk.
 #[derive(Debug, Clone, Copy)]
 pub enum Container<'a, 'b> {
+    /// An object summarized before its values are visited.
     Object(&'b Object<'a>),
+    /// An array.
     Array,
 }
 
@@ -230,7 +238,9 @@ pub enum Container<'a, 'b> {
 /// [`exit`](LeafVisitor::exit). `key` is the key the container is stored under
 /// in its parent object, or `None` for array items and the document root.
 pub trait LeafVisitor {
+    /// Enter a container stored under `key`, or the document root when `key` is `None`.
     fn enter(&mut self, key: Option<&str>, container: Container<'_, '_>);
+    /// Exit the most recently entered container.
     fn exit(&mut self);
     /// Returns the replacement for this value, or `None` to keep it.
     fn leaf(&mut self, leaf: &Leaf<'_>) -> Option<Replacement>;
@@ -261,7 +271,9 @@ pub struct Replacement {
 /// One substitution within a value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
+    /// The byte range to replace within the decoded value.
     pub range: Range<usize>,
+    /// The replacement text for the range.
     pub text: String,
 }
 
@@ -357,6 +369,7 @@ impl FormatRegistry {
         self.formats.push(format);
     }
 
+    /// Return the registered format named `name`.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Format>> {
         self.formats
             .iter()
@@ -370,6 +383,7 @@ impl FormatRegistry {
         self.formats.iter().map(|f| f.name())
     }
 
+    /// Iterate over registered formats in registration order.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Format>> {
         self.formats.iter()
     }

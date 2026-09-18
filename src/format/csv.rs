@@ -15,6 +15,7 @@ pub struct Csv {
 }
 
 impl Csv {
+    /// Create the comma-separated `csv` format.
     pub const fn comma() -> Self {
         Self {
             name: "csv",
@@ -23,6 +24,7 @@ impl Csv {
         }
     }
 
+    /// Create the tab-separated `tsv` format.
     pub const fn tab() -> Self {
         Self {
             name: "tsv",
@@ -31,6 +33,7 @@ impl Csv {
         }
     }
 
+    /// Create the pipe-separated `psv` format.
     pub const fn pipe() -> Self {
         Self {
             name: "psv",

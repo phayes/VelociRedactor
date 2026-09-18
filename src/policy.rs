@@ -33,7 +33,9 @@ pub struct PolicyConfig {
     pub skip_key_suffixes: Vec<String>,
     /// Keys skipped by exact lowercase name.
     pub skip_keys: Vec<String>,
+    /// Object-field rules that exclude complete objects from scanning.
     pub skip_object: SkipObjectConfig,
+    /// Key vocabularies used to recognize connection-settings objects.
     pub credential_context: CredentialContextConfig,
 }
 
@@ -55,7 +57,9 @@ pub struct SkipObjectConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialContextConfig {
+    /// Keys that identify the connection host or data source.
     pub host_keys: Vec<String>,
+    /// Keys that identify the connection user.
     pub user_keys: Vec<String>,
 }
 

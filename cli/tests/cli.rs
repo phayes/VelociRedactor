@@ -8,6 +8,9 @@ const S: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 /// The configuration built into the binary, as the crate ships it.
 const BUILTIN: &str = include_str!("../../default_config.yml");
 
+/// The command-line manual built into the binary.
+const CLI_README: &str = include_str!("../../README.md");
+
 /// Environment variable the binary reads for a configuration file.
 const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
 
@@ -441,6 +444,18 @@ fn list_formats() {
             "{name} missing"
         );
     }
+}
+
+#[test]
+fn man_prints_the_cli_readme() {
+    let out = velociredactor(&["man"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), CLI_README);
+    assert!(out.stderr.is_empty());
+
+    let help = velociredactor(&["--help"], "");
+    assert!(help.status.success(), "{}", stderr(&help));
+    assert!(stdout(&help).contains("man"), "{}", stdout(&help));
 }
 
 #[test]

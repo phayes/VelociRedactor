@@ -24,6 +24,7 @@ pub struct PathDetector {
 }
 
 impl PathDetector {
+    /// Build a detector from key-path glob patterns.
     pub fn new(patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Self {
             globs: patterns
@@ -33,6 +34,7 @@ impl PathDetector {
         }
     }
 
+    /// Whether the detector contains no path patterns.
     pub fn is_empty(&self) -> bool {
         self.globs.is_empty()
     }

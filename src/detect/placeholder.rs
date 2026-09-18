@@ -23,7 +23,9 @@ pub struct PlaceholderConfig {
     pub values: Vec<String>,
     /// One string, one character per masking character.
     pub mask_characters: String,
+    /// Minimum length of a repeated-character mask.
     pub mask_min_length: usize,
+    /// Minimum interior length of a lowercase `<name>` placeholder.
     pub bracket_min_length: usize,
 }
 

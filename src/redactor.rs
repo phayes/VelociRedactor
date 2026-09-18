@@ -46,6 +46,7 @@ impl Default for RedactorBuilder {
 }
 
 impl RedactorBuilder {
+    /// Create a builder with plain text, the default policy, and no detectors.
     pub fn new() -> Self {
         Self {
             detectors: Vec::new(),
@@ -118,6 +119,7 @@ impl RedactorBuilder {
         self
     }
 
+    /// Finish the builder and return an immutable redactor.
     pub fn build(self) -> Redactor {
         Redactor {
             detectors: self.detectors.into(),
@@ -166,6 +168,7 @@ impl Redactor {
         RedactorBuilder::new().defaults()
     }
 
+    /// Return the formats registered with this redactor.
     pub fn formats(&self) -> &FormatRegistry {
         &self.formats
     }

@@ -117,6 +117,7 @@ pub struct LeafContext<'a> {
 /// A sensitive byte range reported by a detector.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detection {
+    /// The byte range within the scanned value.
     pub range: Range<usize>,
     /// What found it; see [`Detector::name`]. Rule-based detectors may report
     /// a more specific label, such as the matching rule's id.
@@ -124,6 +125,7 @@ pub struct Detection {
 }
 
 impl Detection {
+    /// Create a detection for `range` with the report label `label`.
     pub fn new(range: Range<usize>, label: impl Into<String>) -> Self {
         Self {
             range,

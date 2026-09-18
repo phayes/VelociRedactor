@@ -12,13 +12,17 @@ use crate::Error;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntropyConfig {
+    /// Bits per byte required for tokens under ordinary keys.
     pub threshold: f64,
+    /// Bits per byte required for tokens under sensitive keys.
     pub sensitive_threshold: f64,
+    /// Minimum number of token characters considered for detection.
     pub min_token_length: usize,
     /// Single lowercase words marking a key as holding a secret.
     pub sensitive_segments: Vec<String>,
     /// Key names that merely look sensitive and keep the ordinary threshold.
     pub structural_keys: Vec<String>,
+    /// Hexadecimal lengths redacted under sensitive keys regardless of entropy.
     pub hex_digest_lengths: Vec<usize>,
 }
 
@@ -97,10 +101,12 @@ impl EntropyDetector {
         })
     }
 
+    /// Return the bits-per-byte threshold for ordinary keys.
     pub fn threshold(&self) -> f64 {
         self.threshold
     }
 
+    /// Return the bits-per-byte threshold for sensitive keys.
     pub fn sensitive_threshold(&self) -> f64 {
         self.sensitive_threshold
     }

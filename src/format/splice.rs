@@ -15,6 +15,7 @@ pub struct Splicer<'a> {
 }
 
 impl<'a> Splicer<'a> {
+    /// Create a splicer for `input` with no recorded edits.
     pub fn new(input: &'a [u8]) -> Self {
         Self {
             input,
@@ -57,6 +58,7 @@ impl<'a> Splicer<'a> {
         self.edits.is_empty()
     }
 
+    /// Apply the recorded edits and return the resulting bytes.
     pub fn finish(mut self) -> Vec<u8> {
         if self.edits.is_empty() {
             return self.input.to_vec();

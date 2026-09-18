@@ -69,6 +69,7 @@ impl RegexDetector {
         Ok(Self { name, regex })
     }
 
+    /// Return the compiled regular expression used by this detector.
     pub fn regex(&self) -> &Regex {
         &self.regex
     }

@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.88"
 description = "Redact secrets and PII from text and structured files, with stable numbered redactions"
 license = "MIT"
+readme = "README.crate.md"
+repository = "https://github.com/phayes/velociredactor"
+homepage = "https://github.com/phayes/velociredactor"
+documentation = "https://docs.rs/velociredactor"
 keywords = ["redaction", "secrets", "pii", "gitleaks", "security"]
 categories = ["command-line-utilities", "text-processing"]
 
