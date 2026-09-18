@@ -20,6 +20,8 @@ mod entropy;
 mod path;
 mod pii;
 mod placeholder;
+#[cfg(feature = "privacy-filter")]
+pub mod privacy_filter;
 mod regex;
 mod ruleset;
 mod uri;
@@ -32,6 +34,8 @@ pub use entropy::{EntropyConfig, EntropyDetector, shannon_entropy};
 pub use path::{PathConfig, PathDetector};
 pub use pii::{AddressDetector, EmailConfig, EmailDetector, PhoneDetector};
 pub use placeholder::{PlaceholderConfig, Placeholders, is_placeholder};
+#[cfg(feature = "privacy-filter")]
+pub use privacy_filter::{ModelConfig, PrivacyFilterConfig, PrivacyFilterDetector, ViterbiConfig};
 pub(crate) use regex::describe_regex_error;
 pub use regex::{RegexConfig, RegexDetector};
 pub use ruleset::{BETTERLEAKS_RULESET, RuleSource, RulesetConfig, RulesetDetector};
@@ -39,6 +43,15 @@ pub use uri::CredentialedUriDetector;
 pub use value::{ValueConfig, ValueDetector};
 
 /// Finds sensitive ranges within a single value.
+///
+/// Most detectors judge each value on its own and implement only
+/// [`detect`](Detector::detect). A detector that is better off seeing a whole
+/// document at once — because it needs the surrounding values as context, or
+/// because each call is expensive — also returns `true` from
+/// [`document_scope`](Detector::document_scope), and is then called once per
+/// document through [`detect_document`](Detector::detect_document) instead.
+/// Either way it reports ranges within individual values, so it redacts
+/// exactly as a per-value detector would.
 pub trait Detector: Send + Sync {
     /// A short identifier shown in reports, such as `entropy` or `pii:email`.
     fn name(&self) -> &str;
@@ -47,6 +60,43 @@ pub trait Detector: Send + Sync {
     ///
     /// Ranges may overlap and need not be sorted.
     fn detect(&self, value: &str, ctx: &LeafContext<'_>, out: &mut Vec<Detection>);
+
+    /// Whether this detector is called once per document, through
+    /// [`detect_document`](Detector::detect_document), rather than once per
+    /// value through [`detect`](Detector::detect).
+    fn document_scope(&self) -> bool {
+        false
+    }
+
+    /// Detect over every scanned value of a document at once, appending the
+    /// ranges found in `values[i]` to `out[i]`.
+    ///
+    /// `values` are the values the policy lets through, in document order,
+    /// and `out` has one entry for each. Unlike [`detect`](Detector::detect),
+    /// this can fail, which fails the whole redaction: a detector that could
+    /// not look must not be mistaken for one that found nothing.
+    ///
+    /// The default calls [`detect`](Detector::detect) on each value.
+    fn detect_document(
+        &self,
+        values: &[DocumentValue<'_>],
+        out: &mut [Vec<Detection>],
+    ) -> Result<(), crate::Error> {
+        for (value, out) in values.iter().zip(out) {
+            self.detect(value.value, &value.ctx, out);
+        }
+        Ok(())
+    }
+}
+
+/// One scanned value of a document, as given to
+/// [`Detector::detect_document`].
+#[derive(Debug, Clone, Copy)]
+pub struct DocumentValue<'a> {
+    /// The decoded value.
+    pub value: &'a str,
+    /// Where it was found.
+    pub ctx: LeafContext<'a>,
 }
 
 /// Where a value was found.
@@ -121,6 +171,9 @@ pub enum DetectorConfig {
     PiiPhone,
     /// [`AddressDetector`]
     PiiAddress,
+    /// [`PrivacyFilterDetector`]
+    #[cfg(feature = "privacy-filter")]
+    PrivacyFilter(Box<PrivacyFilterConfig>),
 }
 
 /// Build a one-detector list, or an empty one when `skip`.
@@ -147,6 +200,7 @@ pub const DETECTOR_NAMES: &[&str] = &[
     "pii:email",
     "pii:phone",
     "pii:address",
+    "privacy_filter",
 ];
 
 /// A detector entry is a bare name when it takes no settings, and a map of
@@ -165,6 +219,10 @@ struct DetectorVisitor;
 
 /// The detectors that take settings, and so cannot be written as a bare name.
 const CONFIGURED: [&str; 6] = ["entropy", "ruleset", "regex", "value", "path", "pii:email"];
+
+#[cfg(not(feature = "privacy-filter"))]
+const PRIVACY_FILTER_MISSING: &str = "the privacy_filter detector is not compiled into this build \
+     (it needs the `privacy-filter` feature)";
 
 fn unknown_detector<E: serde::de::Error>(name: &str) -> E {
     E::custom(format!(
@@ -188,6 +246,10 @@ impl<'de> serde::de::Visitor<'de> for DetectorVisitor {
             "credential_key" => Ok(DetectorConfig::CredentialKey),
             "pii:phone" => Ok(DetectorConfig::PiiPhone),
             "pii:address" => Ok(DetectorConfig::PiiAddress),
+            #[cfg(feature = "privacy-filter")]
+            "privacy_filter" => Ok(DetectorConfig::PrivacyFilter(Box::default())),
+            #[cfg(not(feature = "privacy-filter"))]
+            "privacy_filter" => Err(E::custom(PRIVACY_FILTER_MISSING)),
             name if CONFIGURED.contains(&name) => Err(E::custom(format!(
                 "the {name} detector needs settings: write `{name}:` and indent them under it"
             ))),
@@ -208,6 +270,14 @@ impl<'de> serde::de::Visitor<'de> for DetectorVisitor {
             "value" => DetectorConfig::Value(map.next_value()?),
             "path" => DetectorConfig::Path(map.next_value()?),
             "pii:email" => DetectorConfig::PiiEmail(map.next_value()?),
+            #[cfg(feature = "privacy-filter")]
+            "privacy_filter" => DetectorConfig::PrivacyFilter(Box::new(
+                // Every setting has a default, so `- privacy_filter:` with
+                // nothing under it is complete.
+                map.next_value::<Option<_>>()?.unwrap_or_default(),
+            )),
+            #[cfg(not(feature = "privacy-filter"))]
+            "privacy_filter" => return Err(A::Error::custom(PRIVACY_FILTER_MISSING)),
             // A detector that takes no settings, written `- name:` with
             // nothing under it.
             other => {
@@ -243,6 +313,8 @@ impl DetectorConfig {
             Self::PiiEmail(_) => "pii:email",
             Self::PiiPhone => "pii:phone",
             Self::PiiAddress => "pii:address",
+            #[cfg(feature = "privacy-filter")]
+            Self::PrivacyFilter(_) => "privacy_filter",
         }
     }
 
@@ -282,19 +354,30 @@ impl DetectorConfig {
             Self::PiiEmail(config) => vec![Box::new(EmailDetector::new(config))],
             Self::PiiPhone => vec![Box::new(PhoneDetector)],
             Self::PiiAddress => vec![Box::new(AddressDetector)],
+            #[cfg(feature = "privacy-filter")]
+            Self::PrivacyFilter(config) => vec![Box::new(PrivacyFilterDetector::new(config)?)],
         })
     }
 
     /// Resolve the file paths this entry names against `base`.
     pub fn resolve_paths(&mut self, base: &Path) {
-        if let Self::Ruleset(config) = self {
-            for source in &mut config.rules {
-                if let RuleSource::Path(path) = source
-                    && path.is_relative()
-                {
-                    *path = base.join(&*path);
+        match self {
+            Self::Ruleset(config) => {
+                for source in &mut config.rules {
+                    if let RuleSource::Path(path) = source
+                        && path.is_relative()
+                    {
+                        *path = base.join(&*path);
+                    }
                 }
             }
+            #[cfg(feature = "privacy-filter")]
+            Self::PrivacyFilter(config) => {
+                if let Some(dir) = config.model_dir.as_mut().filter(|d| d.is_relative()) {
+                    *dir = base.join(&*dir);
+                }
+            }
+            _ => {}
         }
     }
 }

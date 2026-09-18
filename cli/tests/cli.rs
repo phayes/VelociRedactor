@@ -1,7 +1,3 @@
-#![cfg(feature = "cli")]
-
-mod common;
-
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -10,16 +6,46 @@ use std::process::{Command, Output, Stdio};
 const S: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 
 /// The configuration built into the binary, as the crate ships it.
-const BUILTIN: &str = include_str!("../default_config.yml");
+const BUILTIN: &str = include_str!("../../default_config.yml");
+
+/// Environment variable the binary reads for a configuration file.
+const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
 
 fn velociredactor(args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_velociredactor"))
-        .args(args)
+    velociredactor_with(args, stdin, None)
+}
+
+fn velociredactor_with(args: &[&str], stdin: &str, config_env: Option<&str>) -> Output {
+    velociredactor_cmd(args, stdin, config_env, None, None)
+}
+
+fn velociredactor_in(dir: &Path, home: &Path, args: &[&str], stdin: &str) -> Output {
+    velociredactor_cmd(args, stdin, None, Some(dir), Some(home))
+}
+
+fn velociredactor_cmd(
+    args: &[&str],
+    stdin: &str,
+    config_env: Option<&str>,
+    current_dir: Option<&Path>,
+    home: Option<&Path>,
+) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_velociredactor"));
+    cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .env_remove(CONFIG_ENV);
+    if let Some(path) = config_env {
+        cmd.env(CONFIG_ENV, path);
+    }
+    if let Some(dir) = current_dir {
+        cmd.current_dir(dir);
+    }
+    if let Some(home) = home {
+        cmd.env("HOME", home);
+    }
+    let mut child = cmd.spawn().unwrap();
     child
         .stdin
         .take()
@@ -50,8 +76,17 @@ fn stderr(output: &Output) -> String {
 /// It is the built-in configuration with `edits` applied as first-occurrence
 /// replacements, and with `rules` in place of the trailing (empty) `allow`
 /// section — which is how a user writes one: start from
-/// `velociredactor config` and edit.
+/// `velociredactor config show` and edit.
 fn write_config(dir: &Path, edits: &[(impl AsRef<str>, impl AsRef<str>)], rules: &str) -> String {
+    write_named_config(dir, "velociredactor.yml", edits, rules)
+}
+
+fn write_named_config(
+    dir: &Path,
+    name: &str,
+    edits: &[(impl AsRef<str>, impl AsRef<str>)],
+    rules: &str,
+) -> String {
     let head = BUILTIN
         .split_once("\nallow:\n")
         .expect("the built-in configuration ends with the rule sections")
@@ -65,7 +100,7 @@ fn write_config(dir: &Path, edits: &[(impl AsRef<str>, impl AsRef<str>)], rules:
     source.push('\n');
     source.push_str(rules);
 
-    let path = dir.join("velociredactor.yml");
+    let path = dir.join(name);
     fs::write(&path, source).unwrap();
     path.to_str().unwrap().to_owned()
 }
@@ -635,6 +670,7 @@ fn config_resolves_rule_paths_relative_to_itself() {
     let out = Command::new(env!("CARGO_BIN_EXE_velociredactor"))
         .args(["redact", "--config", &config])
         .current_dir(std::env::temp_dir())
+        .env_remove(CONFIG_ENV)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -655,7 +691,7 @@ fn config_resolves_rule_paths_relative_to_itself() {
 
 #[test]
 fn the_config_subcommand_prints_a_usable_starting_point() {
-    let out = velociredactor(&["config"], "");
+    let out = velociredactor(&["config", "show"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let printed = stdout(&out);
     assert_eq!(
@@ -673,6 +709,252 @@ fn the_config_subcommand_prints_a_usable_starting_point() {
     let with_builtin = redact(&["-f", "json"], &input);
     assert!(with_copy.status.success(), "{}", stderr(&with_copy));
     assert_eq!(stdout(&with_copy), stdout(&with_builtin));
+}
+
+#[test]
+fn config_show_prints_a_given_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mine.yml");
+    fs::write(&path, "comments: true\n").unwrap();
+
+    let out = velociredactor(&["config", "show", "--config", path.to_str().unwrap()], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "comments: true\n");
+
+    let out = velociredactor_with(&["config", "show"], "", Some(path.to_str().unwrap()));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "comments: true\n");
+
+    let out = velociredactor(&["config", "show", path.to_str().unwrap()], "");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        stderr(&out).contains("unexpected argument"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn config_location_names_the_file_or_the_builtin() {
+    let out = velociredactor(&["config", "location"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "[builtin-default]\n");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mine.yml");
+    let out = velociredactor(
+        &["config", "location", "--config", path.to_str().unwrap()],
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{}\n", path.display()));
+
+    let out = velociredactor_with(&["config", "location"], "", Some(path.to_str().unwrap()));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{}\n", path.display()));
+}
+
+#[test]
+fn config_flag_overrides_the_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let from_env = dir.path().join("from-env.yml");
+    let from_flag = dir.path().join("from-flag.yml");
+    fs::write(&from_env, "from-env\n").unwrap();
+    fs::write(&from_flag, "from-flag\n").unwrap();
+
+    let out = velociredactor_with(
+        &["config", "show", "--config", from_flag.to_str().unwrap()],
+        "",
+        Some(from_env.to_str().unwrap()),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "from-flag\n");
+
+    let out = velociredactor_with(
+        &[
+            "config",
+            "location",
+            "--config",
+            from_flag.to_str().unwrap(),
+        ],
+        "",
+        Some(from_env.to_str().unwrap()),
+    );
+    assert_eq!(stdout(&out), format!("{}\n", from_flag.display()));
+}
+
+#[test]
+fn redact_reads_the_config_environment() {
+    let env_dir = tempfile::tempdir().unwrap();
+    let flag_dir = tempfile::tempdir().unwrap();
+    let env_config = rules_config(env_dir.path(), "allow:\n  values: [hunter2]\n");
+    let input = "DB_PASSWORD=hunter2\n";
+
+    let out = velociredactor_with(&["redact"], input, Some(&env_config));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), input);
+
+    let flag = rules_config(flag_dir.path(), "allow:\n  values: []\n");
+    let out = velociredactor_with(&["redact", "--config", &flag], input, Some(&env_config));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "DB_PASSWORD=REDACTION-1\n");
+}
+
+#[test]
+fn discovers_velociredactor_yml_from_the_current_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = rules_config(dir.path(), "allow:\n  values: [hunter2]\n");
+    let input = "DB_PASSWORD=hunter2\n";
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["config", "location"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let located = stdout(&out);
+    assert_eq!(
+        fs::canonicalize(located.trim()).unwrap(),
+        fs::canonicalize(&path).unwrap()
+    );
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["redact"], input);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), input);
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["config", "show"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), fs::read_to_string(&path).unwrap());
+}
+
+#[test]
+fn discovers_uppercase_name_by_walking_to_a_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let child = dir.path().join("src");
+    fs::create_dir(&child).unwrap();
+    write_named_config(
+        dir.path(),
+        "VELOCIREDACTOR.yml",
+        NO_EDITS,
+        "allow:\n  values: [hunter2]\n",
+    );
+
+    let out = velociredactor_in(&child, dir.path(), &["config", "location"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let located = stdout(&out);
+    assert_ne!(located, "[builtin-default]\n");
+    assert!(
+        located.contains("velociredactor.yml") || located.contains("VELOCIREDACTOR.yml"),
+        "{located}"
+    );
+
+    let out = velociredactor_in(&child, dir.path(), &["redact"], "DB_PASSWORD=hunter2\n");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "DB_PASSWORD=hunter2\n");
+}
+
+#[test]
+fn command_line_and_environment_override_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    rules_config(dir.path(), "allow:\n  values: [hunter2]\n");
+    let flag_dir = tempfile::tempdir().unwrap();
+    let env_dir = tempfile::tempdir().unwrap();
+    let from_flag = flag_dir.path().join("from-flag.yml");
+    let from_env = env_dir.path().join("from-env.yml");
+    fs::write(&from_flag, "from-flag\n").unwrap();
+    fs::write(&from_env, "from-env\n").unwrap();
+
+    // `--config` wins over a file sitting in the current directory.
+    let out = velociredactor_cmd(
+        &["config", "show", "--config", from_flag.to_str().unwrap()],
+        "",
+        None,
+        Some(dir.path()),
+        Some(dir.path()),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "from-flag\n");
+
+    // `$VELOCIREDACTOR_CONFIG` wins over discovery, and loses to `--config`.
+    let out = velociredactor_cmd(
+        &["config", "show"],
+        "",
+        Some(from_env.to_str().unwrap()),
+        Some(dir.path()),
+        Some(dir.path()),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "from-env\n");
+
+    let out = velociredactor_cmd(
+        &[
+            "config",
+            "location",
+            "--config",
+            from_flag.to_str().unwrap(),
+        ],
+        "",
+        Some(from_env.to_str().unwrap()),
+        Some(dir.path()),
+        Some(dir.path()),
+    );
+    assert_eq!(stdout(&out), format!("{}\n", from_flag.display()));
+}
+
+#[test]
+fn discovery_falls_back_to_the_builtin() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = velociredactor_in(dir.path(), dir.path(), &["config", "location"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "[builtin-default]\n");
+}
+
+#[test]
+fn config_validate_accepts_a_usable_file_and_rejects_a_broken_one() {
+    let out = velociredactor(&["config", "validate"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).is_empty());
+
+    let dir = tempfile::tempdir().unwrap();
+    let ok = dir.path().join("ok.yml");
+    fs::write(&ok, BUILTIN).unwrap();
+    let out = velociredactor(
+        &["config", "validate", "--config", ok.to_str().unwrap()],
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let out = velociredactor_with(&["config", "validate"], "", Some(ok.to_str().unwrap()));
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let broken = dir.path().join("broken.yml");
+    fs::write(&broken, "allow:\n  values: [hunter2]\n").unwrap();
+    let out = velociredactor(
+        &["config", "validate", "--config", broken.to_str().unwrap()],
+        "",
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("formats"), "{}", stderr(&out));
+
+    let unknown = dir.path().join("unknown.yml");
+    fs::write(&unknown, "nonsense: 1\n").unwrap();
+    let out = velociredactor_with(&["config", "validate"], "", Some(unknown.to_str().unwrap()));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("unknown field"), "{}", stderr(&out));
+
+    let invalid = write_config(
+        dir.path(),
+        &[extra_detector("  - regex:\n      patterns: ['unclosed(']")],
+        "allow:\n  regexes: ['also(']\n",
+    );
+    let out = velociredactor(&["config", "validate", "--config", &invalid], "");
+    assert_eq!(out.status.code(), Some(2));
+    let err = stderr(&out);
+    assert!(err.contains("does not compile"), "{err}");
+    assert!(err.contains("allow-regex"), "{err}");
+}
+
+#[test]
+fn config_requires_a_subcommand() {
+    let out = velociredactor(&["config"], "");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("show"), "{}", stderr(&out));
 }
 
 #[test]

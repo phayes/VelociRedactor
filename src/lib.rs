@@ -18,7 +18,9 @@
 //! [`Config::builtin`](config::Config::builtin) is the copy compiled into the
 //! crate. A configuration read from a file **replaces** it — nothing is
 //! merged — which is why the way to write one is to edit a copy of the
-//! built-in file, printed by `velociredactor config`.
+//! built-in file, printed by `velociredactor config show`. The CLI loads that
+//! file from `--config`, then `$VELOCIREDACTOR_CONFIG`, then a discovered
+//! `velociredactor.yml`, then the built-in configuration.
 //!
 //! [`Redactor::builder`] applies the built-in configuration, so the defaults
 //! need no configuration at all. [`Config::apply`](config::Config::apply)
@@ -49,7 +51,9 @@
 //! - [`detect::Detector`] adds detection logic. Register one with
 //!   [`RedactorBuilder::detector`]; the bundled ones are ordinary detectors
 //!   too, so [`detect::BETTERLEAKS_RULESET`] and
-//!   [`detect::EmailDetector`] go in the same way.
+//!   [`detect::EmailDetector`] go in the same way. A detector that needs a
+//!   whole document at once opts in with
+//!   [`Detector::document_scope`](detect::Detector::document_scope).
 //! - [`format::Format`] adds a file format.
 //! - [`policy::LeafPolicy`] changes which structured values are scanned.
 //!

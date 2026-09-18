@@ -1,0 +1,33 @@
+[package]
+name = "velociredactor-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Command-line interface for velociredactor: redact secrets and PII from text and structured files"
+license = "MIT"
+keywords = ["redaction", "secrets", "pii", "gitleaks", "security"]
+categories = ["command-line-utilities", "text-processing"]
+
+[features]
+# Run the privacy_filter model on an NVIDIA GPU. Needs the CUDA toolkit.
+cuda = ["velociredactor/privacy-filter-cuda"]
+# Use the system OpenBLAS for the privacy_filter model on the CPU (Linux).
+openblas = ["velociredactor/privacy-filter-openblas"]
+
+[dependencies]
+velociredactor = { path = "..", version = "0.1.0", features = ["privacy-filter"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+hf-hub = { version = "1", features = ["blocking"] }
+serde_json = "1"
+
+# Apple Accelerate is always there on macOS, so the binary uses it.
+[target.'cfg(target_os = "macos")'.dependencies]
+velociredactor = { path = "..", version = "0.1.0", features = ["privacy-filter-accelerate"] }
+
+[[bin]]
+name = "velociredactor"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

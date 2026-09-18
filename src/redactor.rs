@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::Error;
 use crate::config::Config;
-use crate::detect::{Detection, Detector, LeafContext};
+use crate::detect::{Detection, Detector, DocumentValue, LeafContext};
 use crate::format::{
     Container, Edit, Format, FormatRegistry, Leaf, LeafKind, LeafVisitor, Replacement, apply_edits,
 };
@@ -171,10 +171,16 @@ impl Redactor {
     }
 
     /// Redact `input` as plain text, with every finding replaced.
+    ///
+    /// # Panics
+    ///
+    /// If a document-scoped detector fails (see
+    /// [`Detector::detect_document`]). Use [`redact`](Redactor::redact) with
+    /// [`FormatHint::Raw`] to handle that instead.
     pub fn redact_str(&self, input: &str) -> String {
         let redaction = self
             .redact(input.as_bytes(), FormatHint::Raw)
-            .expect("plain text always parses");
+            .unwrap_or_else(|e| panic!("redacting plain text: {e}"));
         let bytes = redaction
             .render(&Allow::none())
             .expect("plain text always renders");
@@ -231,7 +237,7 @@ impl Redactor {
             Err(err) => return Err(err.into()),
         };
 
-        let detected = self.detect_all(&collector.leaves);
+        let detected = self.detect_all(&collector.leaves)?;
         let mut redaction = Redaction {
             input,
             format,
@@ -248,28 +254,63 @@ impl Redactor {
         Collector::new(self.policy.as_ref(), &self.allow_paths, self.comments)
     }
 
-    fn detect_all(&self, leaves: &[CollectedLeaf]) -> Vec<Vec<Detection>> {
-        let run = |leaf: &CollectedLeaf| {
-            let ctx = LeafContext {
-                key: leaf.key.as_deref(),
-                path: &leaf.path,
-                credential_context: leaf.credential_context,
+    /// Run every detector over `leaves`: the per-value ones on each leaf, and
+    /// the document-scoped ones once over all of them. Returns the merged
+    /// detections of each leaf.
+    fn detect_all(&self, leaves: &[CollectedLeaf]) -> Result<Vec<Vec<Detection>>, Error> {
+        let values: Vec<DocumentValue<'_>> = leaves
+            .iter()
+            .map(|leaf| DocumentValue {
+                value: &leaf.value,
+                ctx: LeafContext {
+                    key: leaf.key.as_deref(),
+                    path: &leaf.path,
+                    credential_context: leaf.credential_context,
+                },
+            })
+            .collect();
+
+        let per_value = || {
+            let run = |value: &DocumentValue<'_>| {
+                let mut out = Vec::new();
+                for detector in self.detectors.iter().filter(|d| !d.document_scope()) {
+                    detector.detect(value.value, &value.ctx, &mut out);
+                }
+                out
             };
-            let mut out = Vec::new();
-            for detector in self.detectors.iter() {
-                detector.detect(&leaf.value, &ctx, &mut out);
+            #[cfg(feature = "parallel")]
+            {
+                use rayon::prelude::*;
+                values.par_iter().map(run).collect::<Vec<_>>()
             }
-            render::merge(&leaf.value, out)
+            #[cfg(not(feature = "parallel"))]
+            {
+                values.iter().map(run).collect::<Vec<_>>()
+            }
         };
+
+        // Each document-scoped detector is called once, in the order listed.
+        let per_document = || -> Result<Vec<Vec<Detection>>, Error> {
+            let mut out = vec![Vec::new(); values.len()];
+            for detector in self.detectors.iter().filter(|d| d.document_scope()) {
+                detector.detect_document(&values, &mut out)?;
+            }
+            Ok(out)
+        };
+
         #[cfg(feature = "parallel")]
-        {
-            use rayon::prelude::*;
-            leaves.par_iter().map(run).collect()
-        }
+        let (mut detected, document) = rayon::join(per_value, per_document);
         #[cfg(not(feature = "parallel"))]
-        {
-            leaves.iter().map(run).collect()
+        let (mut detected, document) = (per_value(), per_document());
+
+        for (out, extra) in detected.iter_mut().zip(document?) {
+            out.extend(extra);
         }
+        Ok(leaves
+            .iter()
+            .zip(detected)
+            .map(|(leaf, out)| render::merge(&leaf.value, out))
+            .collect())
     }
 }
 

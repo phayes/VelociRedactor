@@ -5,8 +5,8 @@ mod common;
 use common::*;
 use velociredactor::config::Config;
 use velociredactor::detect::{
-    AddressDetector, Detection, Detector, DetectorConfig, EmailDetector, LeafContext,
-    PhoneDetector, RegexDetector,
+    AddressDetector, Detection, Detector, DetectorConfig, DocumentValue, EmailDetector,
+    LeafContext, PhoneDetector, RegexDetector,
 };
 use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 use velociredactor::policy::ScanAll;
@@ -216,6 +216,111 @@ impl Detector for Banana {
             out.push(Detection::new(i..i + m.len(), self.name()));
         }
     }
+}
+
+/// A document-scoped detector: flags every value that comes after one equal
+/// to "flag", which no per-value detector could know.
+struct AfterFlag;
+
+impl Detector for AfterFlag {
+    fn name(&self) -> &str {
+        "after_flag"
+    }
+
+    fn detect(&self, _value: &str, _ctx: &LeafContext<'_>, _out: &mut Vec<Detection>) {
+        panic!("a document-scoped detector is never called per value");
+    }
+
+    fn document_scope(&self) -> bool {
+        true
+    }
+
+    fn detect_document(
+        &self,
+        values: &[DocumentValue<'_>],
+        out: &mut [Vec<Detection>],
+    ) -> Result<(), velociredactor::Error> {
+        let mut flagged = false;
+        for (value, out) in values.iter().zip(out) {
+            if flagged {
+                out.push(Detection::new(0..value.value.len(), self.name()));
+            }
+            flagged |= value.value == "flag";
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn document_scoped_detectors_see_the_whole_document() {
+    let redactor = RedactorBuilder::new()
+        .format(velociredactor::format::Json)
+        .detector(AfterFlag)
+        .detector(Banana)
+        .build();
+    let out = render(
+        &redactor,
+        r#"{"a":"one banana","b":"flag","c":"two","d":{"e":"three"}}"#,
+        "json",
+        &Allow::none(),
+    );
+    assert_eq!(
+        out,
+        r#"{"a":"one REDACTION-1","b":"flag","c":"REDACTION-2","d":{"e":"REDACTION-3"}}"#
+    );
+}
+
+#[test]
+fn document_scoped_detectors_are_given_only_scanned_values() {
+    let redactor = RedactorBuilder::new()
+        .format(velociredactor::format::Json)
+        .detector(AfterFlag)
+        .allow_paths(["skipped"])
+        .build();
+    // The skipped "flag" is never seen, so nothing after it is flagged.
+    let out = render(
+        &redactor,
+        r#"{"skipped":"flag","c":"two"}"#,
+        "json",
+        &Allow::none(),
+    );
+    assert_eq!(out, r#"{"skipped":"flag","c":"two"}"#);
+}
+
+/// A document-scoped detector that cannot look.
+struct Broken;
+
+impl Detector for Broken {
+    fn name(&self) -> &str {
+        "broken"
+    }
+
+    fn detect(&self, _value: &str, _ctx: &LeafContext<'_>, _out: &mut Vec<Detection>) {}
+
+    fn document_scope(&self) -> bool {
+        true
+    }
+
+    fn detect_document(
+        &self,
+        _values: &[DocumentValue<'_>],
+        _out: &mut [Vec<Detection>],
+    ) -> Result<(), velociredactor::Error> {
+        Err(velociredactor::Error::Detector {
+            name: self.name().into(),
+            message: "no model".into(),
+        })
+    }
+}
+
+#[test]
+fn a_failing_document_scoped_detector_fails_the_redaction() {
+    let redactor = RedactorBuilder::new().detector(Broken).build();
+    let err = redactor
+        .redact(b"hello", FormatHint::Raw)
+        .err()
+        .expect("a detector that could not look is not a clean result");
+    assert_eq!(err.to_string(), "broken: no model");
 }
 
 /// A `key: value` per line format that only treats text after `: ` as a value.

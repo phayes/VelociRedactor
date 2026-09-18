@@ -19,6 +19,11 @@ pub enum Error {
     #[error("config: {0}")]
     Config(String),
 
+    /// A detector failed while looking at the input, so the input cannot be
+    /// said to be clean.
+    #[error("{name}: {message}")]
+    Detector { name: String, message: String },
+
     /// The input could not be processed as the requested format.
     #[error(transparent)]
     Format(#[from] FormatError),

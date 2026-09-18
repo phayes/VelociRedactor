@@ -17,8 +17,12 @@
 //! copy:
 //!
 //! ```text
-//! velociredactor config > my-config.yml
+//! velociredactor config show > my-config.yml
 //! ```
+//!
+//! The CLI reads that file from `--config`, then `$VELOCIREDACTOR_CONFIG`,
+//! then a `velociredactor.yml` discovered by walking from the current
+//! directory, then the built-in configuration.
 //!
 //! The sections that decide what is scanned are required for that reason:
 //! omitting one would otherwise mean an empty list, which weakens redaction
@@ -139,6 +143,52 @@ impl Config {
         // a second copy of every detector the built-in configuration lists.
         let builder = self.apply(RedactorBuilder::new(), &mut warnings)?;
         Ok((builder.build(), warnings))
+    }
+
+    /// Check every part of this configuration that can fail independently.
+    ///
+    /// The configuration must already have been parsed. Returns the problems
+    /// that prevent it from being used, and the warnings [`Config::redactor`]
+    /// would raise, each in the order they appear.
+    pub fn validate(&self) -> (Vec<String>, Vec<String>) {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        let placeholders = match Placeholders::new(&self.placeholder) {
+            Ok(placeholders) => Some(placeholders),
+            Err(error) => {
+                errors.push(error.to_string());
+                None
+            }
+        };
+        if let Err(error) = ConfigPolicy::new(&self.policy) {
+            errors.push(error.to_string());
+        }
+
+        let available = FormatRegistry::default();
+        for name in &self.formats {
+            if !format::ALL_NAMES.contains(&name.as_str()) {
+                errors.push(Error::UnknownFormat(name.clone()).to_string());
+            } else if available.get(name).is_none() {
+                warnings.push(format!(
+                    "format {name:?} is not compiled into this build; skipping it"
+                ));
+            }
+        }
+
+        if let Some(placeholders) = &placeholders {
+            for detector in &self.detectors {
+                if let Err(error) = detector.detectors(placeholders) {
+                    errors.push(error.to_string());
+                }
+            }
+        }
+
+        if let Err(error) = self.allow() {
+            errors.push(error.to_string());
+        }
+
+        (errors, warnings)
     }
 
     /// Add everything this configuration describes to `builder`.
@@ -312,6 +362,56 @@ mod tests {
         assert!(warnings.iter().any(|w| w.contains("csv")), "{warnings:?}");
     }
 
+    /// The commented-out `privacy_filter` entry, uncommented, parses to the
+    /// defaults it claims to show.
+    #[cfg(feature = "privacy-filter")]
+    #[test]
+    fn the_documented_privacy_filter_entry_is_the_default() {
+        use crate::detect::PrivacyFilterConfig;
+
+        let source = Config::builtin_source();
+        let start = source.find("  # - privacy_filter:").unwrap();
+        let entry: String = source[start..]
+            .lines()
+            .take_while(|l| !l.is_empty())
+            .map(|l| l.replacen("  # ", "  ", 1) + "\n")
+            .collect();
+        let config = Config::from_yaml(&edited("  - credential_key\n", &entry)).unwrap();
+        let Some(DetectorConfig::PrivacyFilter(documented)) = config.detectors.last() else {
+            panic!("expected a privacy_filter entry in:\n{entry}");
+        };
+        let default = PrivacyFilterConfig::default();
+        assert_eq!(
+            documented.model_dir.as_deref(),
+            Some(Path::new("./privacy-filter"))
+        );
+        assert_eq!(documented.device, default.device);
+        assert_eq!(documented.context, default.context);
+        assert_eq!(documented.min_score, default.min_score);
+        assert_eq!(documented.categories, default.categories);
+        assert_eq!(documented.max_tokens, default.max_tokens);
+
+        // And the bare name is a complete entry.
+        let config =
+            Config::from_yaml(&edited("  - credential_key\n", "  - privacy_filter\n")).unwrap();
+        assert!(matches!(
+            config.detectors.last(),
+            Some(DetectorConfig::PrivacyFilter(c)) if c.model_dir.is_none()
+        ));
+    }
+
+    #[cfg(not(feature = "privacy-filter"))]
+    #[test]
+    fn privacy_filter_without_the_feature_says_so() {
+        let err = Config::from_yaml(&edited(
+            "  - credentialed_uri",
+            "  - privacy_filter:\n      model_dir: m",
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("`privacy-filter` feature"), "{err}");
+    }
+
     #[test]
     fn an_unknown_format_is_rejected() {
         let mut config = Config::builtin().clone();
@@ -322,6 +422,38 @@ mod tests {
             .expect("a format velociredactor does not know is an error")
             .to_string();
         assert!(err.contains("jsn"), "{err}");
+    }
+
+    #[test]
+    fn validate_accepts_the_builtin_configuration() {
+        let (errors, warnings) = Config::builtin().validate();
+        assert!(errors.is_empty(), "{errors:?}");
+        #[cfg(feature = "csv")]
+        assert!(warnings.is_empty(), "{warnings:?}");
+        #[cfg(not(feature = "csv"))]
+        assert!(warnings.iter().any(|w| w.contains("csv")), "{warnings:?}");
+    }
+
+    #[test]
+    fn validate_reports_independent_problems_together() {
+        let mut config = Config::builtin().clone();
+        config.formats.push("jsn".into());
+        config.detectors.push(DetectorConfig::Regex(RegexConfig {
+            patterns: vec!["unclosed(".into()],
+            ..RegexConfig::default()
+        }));
+        config.allow.regexes.push("unclosed(".into());
+
+        let (errors, _) = config.validate();
+        assert!(errors.iter().any(|e| e.contains("jsn")), "{errors:?}");
+        assert!(
+            errors.iter().any(|e| e.contains("does not compile")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("allow-regex")),
+            "{errors:?}"
+        );
     }
 
     #[test]
