@@ -6335,7 +6335,7 @@ checksum = "58c1dc449b873236909c7f325adf395071c209047737d831183e95c692413adf"
 
 [[package]]
 name = "velociredactor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aho-corasick",
  "burn",
@@ -6374,7 +6374,7 @@ dependencies = [
 
 [[package]]
 name = "velociredactor-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
