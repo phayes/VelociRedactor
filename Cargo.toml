@@ -1,5 +1,5 @@
 [package]
-name = "stripsecret"
+name = "velociredactor"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
@@ -67,7 +67,7 @@ tempfile = "3"
 toml_edit = "0.25"
 
 [[bin]]
-name = "stripsecret"
+name = "velociredactor"
 path = "src/main.rs"
 required-features = ["cli"]
 

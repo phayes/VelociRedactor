@@ -1,4 +1,4 @@
-//! The configuration: everything stripsecret knows, as data.
+//! The configuration: everything velociredactor knows, as data.
 //!
 //! A [`Config`] says which values are looked at ([`policy`](Config::policy)),
 //! which of them are documentation rather than secrets
@@ -17,7 +17,7 @@
 //! copy:
 //!
 //! ```text
-//! stripsecret config > my-config.yml
+//! velociredactor config > my-config.yml
 //! ```
 //!
 //! The sections that decide what is scanned are required for that reason:
@@ -42,7 +42,7 @@ use crate::{Allow, Error, Redactor, RedactorBuilder};
 /// The configuration built into this binary.
 const DEFAULT_CONFIG: &str = include_str!("../default_config.yml");
 
-/// Everything stripsecret knows: what to scan, what looks for secrets in it,
+/// Everything velociredactor knows: what to scan, what looks for secrets in it,
 /// and the rules over the result.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -319,7 +319,7 @@ mod tests {
         let err = config
             .redactor()
             .err()
-            .expect("a format stripsecret does not know is an error")
+            .expect("a format velociredactor does not know is an error")
             .to_string();
         assert!(err.contains("jsn"), "{err}");
     }

@@ -12,8 +12,8 @@ const S: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 /// The configuration built into the binary, as the crate ships it.
 const BUILTIN: &str = include_str!("../default_config.yml");
 
-fn stripsecret(args: &[&str], stdin: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_stripsecret"))
+fn velociredactor(args: &[&str], stdin: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_velociredactor"))
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -30,11 +30,11 @@ fn stripsecret(args: &[&str], stdin: &str) -> Output {
 }
 
 fn redact(args: &[&str], stdin: &str) -> Output {
-    stripsecret(&[&["redact"], args].concat(), stdin)
+    velociredactor(&[&["redact"], args].concat(), stdin)
 }
 
 fn list(args: &[&str], stdin: &str) -> Output {
-    stripsecret(&[&["list"], args].concat(), stdin)
+    velociredactor(&[&["list"], args].concat(), stdin)
 }
 
 fn stdout(output: &Output) -> String {
@@ -50,7 +50,7 @@ fn stderr(output: &Output) -> String {
 /// It is the built-in configuration with `edits` applied as first-occurrence
 /// replacements, and with `rules` in place of the trailing (empty) `allow`
 /// section — which is how a user writes one: start from
-/// `stripsecret config` and edit.
+/// `velociredactor config` and edit.
 fn write_config(dir: &Path, edits: &[(impl AsRef<str>, impl AsRef<str>)], rules: &str) -> String {
     let head = BUILTIN
         .split_once("\nallow:\n")
@@ -65,7 +65,7 @@ fn write_config(dir: &Path, edits: &[(impl AsRef<str>, impl AsRef<str>)], rules:
     source.push('\n');
     source.push_str(rules);
 
-    let path = dir.join("stripsecret.yml");
+    let path = dir.join("velociredactor.yml");
     fs::write(&path, source).unwrap();
     path.to_str().unwrap().to_owned()
 }
@@ -396,7 +396,7 @@ fn invalid_structured_input_falls_back_to_text() {
 
 #[test]
 fn list_formats() {
-    let out = stripsecret(&["formats"], "");
+    let out = velociredactor(&["formats"], "");
     let listing = stdout(&out);
     for name in [
         "json", "jsonl", "yaml", "toml", "xml", "hcl", "ini", "dotenv", "csv",
@@ -410,9 +410,9 @@ fn list_formats() {
 
 #[test]
 fn subcommand_is_required() {
-    let out = stripsecret(&[], "");
+    let out = velociredactor(&[], "");
     assert!(!out.status.success());
-    let out = stripsecret(&["--allow-by-key", "x"], "");
+    let out = velociredactor(&["--allow-by-key", "x"], "");
     assert!(!out.status.success());
 }
 
@@ -632,7 +632,7 @@ fn config_resolves_rule_paths_relative_to_itself() {
     );
 
     // Run from a directory where `rules` does not exist.
-    let out = Command::new(env!("CARGO_BIN_EXE_stripsecret"))
+    let out = Command::new(env!("CARGO_BIN_EXE_velociredactor"))
         .args(["redact", "--config", &config])
         .current_dir(std::env::temp_dir())
         .stdin(Stdio::piped())
@@ -655,7 +655,7 @@ fn config_resolves_rule_paths_relative_to_itself() {
 
 #[test]
 fn the_config_subcommand_prints_a_usable_starting_point() {
-    let out = stripsecret(&["config"], "");
+    let out = velociredactor(&["config"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let printed = stdout(&out);
     assert_eq!(

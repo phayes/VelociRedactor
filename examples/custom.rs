@@ -1,10 +1,10 @@
-//! Extending stripsecret with a custom detector and a custom file format.
+//! Extending velociredactor with a custom detector and a custom file format.
 //!
 //! Run with `cargo run --example custom`.
 
-use stripsecret::detect::{Detection, Detector, LeafContext};
-use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
-use stripsecret::{Allow, FormatHint, Redactor};
+use velociredactor::detect::{Detection, Detector, LeafContext};
+use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+use velociredactor::{Allow, FormatHint, Redactor};
 
 /// Flags internal ticket numbers such as `TICKET-1234`.
 struct TicketDetector;

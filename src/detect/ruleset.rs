@@ -56,8 +56,8 @@ fn default_toml() -> &'static str {
 /// [`RedactorBuilder::detector`](crate::RedactorBuilder::detector):
 ///
 /// ```
-/// use stripsecret::RedactorBuilder;
-/// use stripsecret::detect::BETTERLEAKS_RULESET;
+/// use velociredactor::RedactorBuilder;
+/// use velociredactor::detect::BETTERLEAKS_RULESET;
 ///
 /// let redactor = RedactorBuilder::new()
 ///     .detector(BETTERLEAKS_RULESET.clone())

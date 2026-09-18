@@ -23,8 +23,8 @@ use crate::render::{self, Allow};
 /// run a different set, add exactly the ones you want to an empty builder:
 ///
 /// ```
-/// use stripsecret::RedactorBuilder;
-/// use stripsecret::detect::{BETTERLEAKS_RULESET, EmailDetector};
+/// use velociredactor::RedactorBuilder;
+/// use velociredactor::detect::{BETTERLEAKS_RULESET, EmailDetector};
 ///
 /// let redactor = RedactorBuilder::new()
 ///     .detector(BETTERLEAKS_RULESET.clone())

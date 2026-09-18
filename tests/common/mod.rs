@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use stripsecret::{Allow, FormatHint, Redaction, Redactor};
+use velociredactor::{Allow, FormatHint, Redaction, Redactor};
 
 /// A value whose Shannon entropy is above the default threshold.
 pub const HIGH_ENTROPY_SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";

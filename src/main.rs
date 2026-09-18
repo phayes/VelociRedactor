@@ -6,8 +6,8 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
-use stripsecret::config::Config;
-use stripsecret::{Allow, Finding, FormatHint, Redaction, Redactor};
+use velociredactor::config::Config;
+use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor};
 
 /// Redact secrets and personal data from files.
 ///
@@ -16,11 +16,11 @@ use stripsecret::{Allow, Finding, FormatHint, Redaction, Redactor};
 /// number.
 ///
 /// What counts as a secret is configuration, not command line: the options
-/// here say how to apply the rules, and `stripsecret config` prints the rules
+/// here say how to apply the rules, and `velociredactor config` prints the rules
 /// that are built in. Write your own by editing a copy of them:
 ///
-///     stripsecret config > my-config.yml
-///     stripsecret redact --config my-config.yml secrets.json
+///     velociredactor config > my-config.yml
+///     velociredactor redact --config my-config.yml secrets.json
 #[derive(Debug, Parser)]
 #[command(version, about, long_about)]
 struct Cli {
@@ -82,7 +82,7 @@ struct InputArgs {
     /// File to read. Reads standard input when omitted or `-`.
     file: Option<PathBuf>,
 
-    /// Rules to apply, replacing the built-in ones. See `stripsecret config`.
+    /// Rules to apply, replacing the built-in ones. See `velociredactor config`.
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 

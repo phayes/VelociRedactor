@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use stripsecret::{Allow, FormatHint};
+use velociredactor::{Allow, FormatHint};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
@@ -87,11 +87,11 @@ second: "REDACTION-1"
         .map(|doc| serde::Deserialize::deserialize(doc).unwrap())
         .collect();
     let token = docs[0]["token"].as_str().unwrap();
-    assert!(stripsecret::is_redaction_token(token), "{token}");
-    assert!(stripsecret::is_redaction_token(
+    assert!(velociredactor::is_redaction_token(token), "{token}");
+    assert!(velociredactor::is_redaction_token(
         docs[0]["flow"][1].as_str().unwrap()
     ));
-    assert!(stripsecret::is_redaction_token(
+    assert!(velociredactor::is_redaction_token(
         docs[1]["second"].as_str().unwrap()
     ));
     unchanged_without_secrets("yaml", "a: 1\nb: [x, y]\nc: {d: e}\n");

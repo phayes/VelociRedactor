@@ -1,10 +1,10 @@
-# stripsecret default configuration.
+# velociredactor default configuration.
 #
 # This file is built into the binary. Passing --config FILE replaces it
 # entirely: nothing is merged and nothing is inherited. To write your own,
 # start from a copy of this one:
 #
-#     stripsecret config > my-config.yml
+#     velociredactor config > my-config.yml
 
 # Scan comments as well as values, in the formats that have them (JSON with
 # comments, YAML, TOML, HCL, INI, dotenv, XML, Java properties).
@@ -118,7 +118,7 @@ placeholder:
 #
 # Every detector that runs is listed here with its own settings; a detector
 # that is not listed does not run. Detectors that take no settings are written
-# as a bare name. The name of each is what `stripsecret list` reports in its
+# as a bare name. The name of each is what `velociredactor list` reports in its
 # DETECTOR column.
 # ---------------------------------------------------------------------------
 detectors:

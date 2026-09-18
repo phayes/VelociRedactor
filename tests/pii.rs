@@ -1,11 +1,11 @@
 mod common;
 
 use common::*;
-use stripsecret::detect::{
+use velociredactor::detect::{
     AddressDetector, Detector, EmailConfig, EmailDetector, LeafContext, PhoneDetector,
     RegexDetector,
 };
-use stripsecret::{Allow, FormatHint, Redactor, RedactorBuilder};
+use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder};
 
 fn matches(detector: &dyn Detector, s: &str) -> Vec<String> {
     let mut out = Vec::new();

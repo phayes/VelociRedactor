@@ -3,14 +3,14 @@
 mod common;
 
 use common::*;
-use stripsecret::config::Config;
-use stripsecret::detect::{
+use velociredactor::config::Config;
+use velociredactor::detect::{
     AddressDetector, Detection, Detector, DetectorConfig, EmailDetector, LeafContext,
     PhoneDetector, RegexDetector,
 };
-use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
-use stripsecret::policy::ScanAll;
-use stripsecret::{Allow, FormatHint, Redactor, RedactorBuilder};
+use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+use velociredactor::policy::ScanAll;
+use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 

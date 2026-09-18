@@ -89,14 +89,14 @@ fn vendor_dir() -> Result<PathBuf, String> {
             return Ok(dir.join("vendor").join("betterleaks"));
         }
         if !dir.pop() {
-            return Err("run this from inside the stripsecret repository".into());
+            return Err("run this from inside the velociredactor repository".into());
         }
     }
 }
 
 fn is_repo_root(dir: &Path) -> bool {
     fs::read_to_string(dir.join("Cargo.toml"))
-        .is_ok_and(|manifest| manifest.contains("name = \"stripsecret\""))
+        .is_ok_and(|manifest| manifest.contains("name = \"velociredactor\""))
 }
 
 /// The newest published release tag. GitHub redirects `/releases/latest` to

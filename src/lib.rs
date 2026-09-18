@@ -11,21 +11,21 @@
 //! scanned as well only on request. [`FormatHint::Raw`] skips that parsing
 //! and treats the whole input as plain text.
 //!
-//! Everything stripsecret knows is data, not code: which keys are skipped,
+//! Everything velociredactor knows is data, not code: which keys are skipped,
 //! which values are documentation placeholders, which detectors run and what
 //! each one is told, which formats are recognized, and what survives whatever
 //! found it. [`config::Config`] is that data, and
 //! [`Config::builtin`](config::Config::builtin) is the copy compiled into the
 //! crate. A configuration read from a file **replaces** it — nothing is
 //! merged — which is why the way to write one is to edit a copy of the
-//! built-in file, printed by `stripsecret config`.
+//! built-in file, printed by `velociredactor config`.
 //!
 //! [`Redactor::builder`] applies the built-in configuration, so the defaults
 //! need no configuration at all. [`Config::apply`](config::Config::apply)
 //! applies another one to a builder.
 //!
 //! ```
-//! use stripsecret::{Allow, FormatHint, Redactor};
+//! use velociredactor::{Allow, FormatHint, Redactor};
 //!
 //! let redactor = Redactor::builder().build();
 //! let input = br#"{"db_password": "hunter2", "note": "hello"}"#;
