@@ -1,0 +1,16 @@
+{
+  "name": "velociredactor",
+  "owner": {
+    "name": "Patrick Hayes"
+  },
+  "metadata": {
+    "description": "Agent skills and hooks for velociredactor."
+  },
+  "plugins": [
+    {
+      "name": "velociredactor",
+      "source": "./plugin",
+      "description": "Read sensitive files through velociredactor so secrets and personal data never reach the model."
+    }
+  ]
+}

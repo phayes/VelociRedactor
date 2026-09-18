@@ -1,0 +1,12 @@
+{
+  "name": "velociredactor",
+  "version": "0.1.0",
+  "description": "Read sensitive files through velociredactor so secrets and personal data never reach the model. Asks which files to protect on first use, and can block direct reads of them.",
+  "author": {
+    "name": "Patrick Hayes"
+  },
+  "homepage": "https://github.com/phayes/velociredactor",
+  "repository": "https://github.com/phayes/velociredactor",
+  "license": "MIT",
+  "keywords": ["secrets", "redaction", "pii", "security", "privacy"]
+}

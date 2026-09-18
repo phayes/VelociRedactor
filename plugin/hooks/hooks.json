@@ -1,0 +1,17 @@
+{
+  "description": "Deny reading, or searching, files the project's velociredactor.yml protects when its agent section sets enforce: true, pointing the agent at velociredactor redact or grep instead.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "velociredactor agent hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

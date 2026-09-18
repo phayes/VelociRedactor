@@ -4,11 +4,13 @@ use regex::Regex;
 
 /// A glob pattern.
 ///
-/// Two flavors are supported:
+/// Three flavors are supported:
 ///
 /// - [`Glob::new`] treats `.` as a separator, for matching the dotted key
 ///   paths of structured documents. `*` matches within one segment, `**`
 ///   matches across segments, and `?` matches one character other than `.`.
+/// - [`Glob::path`] is the same with `/` as the separator, for matching
+///   relative file paths.
 /// - [`Glob::flat`] has no separator: `*` matches any run of characters and
 ///   `?` matches any single character. It is used for detector names, which
 ///   contain `.` and `:` as ordinary characters.
@@ -25,6 +27,14 @@ impl Glob {
     /// also `a.b`.
     pub fn new(pattern: &str) -> Self {
         Self::compile(pattern, Some('.'))
+    }
+
+    /// A separator-aware pattern, for `/`-separated file paths.
+    ///
+    /// `src/*.rs` matches `src/main.rs` but not `src/a/b.rs`; `src/**/*.rs`
+    /// matches both.
+    pub fn path(pattern: &str) -> Self {
+        Self::compile(pattern, Some('/'))
     }
 
     /// A pattern with no separator, where `*` matches anything.
@@ -61,9 +71,11 @@ pub(crate) fn any_match(globs: &[Glob], text: &str) -> bool {
 fn translate(pattern: &str, separator: Option<char>) -> String {
     // Without a separator every wildcard is unrestricted.
     let (star, question) = match separator {
-        Some('.') => ("[^.]*", "[^.]"),
-        Some(_) => unreachable!("only `.` is supported as a separator"),
-        None => (".*", "."),
+        Some(sep) => {
+            let class = format!("[^{}]", regex::escape(&sep.to_string()));
+            (format!("{class}*"), class)
+        }
+        None => (".*".to_owned(), ".".to_owned()),
     };
 
     let mut out = String::with_capacity(pattern.len() * 2 + 4);
@@ -72,28 +84,31 @@ fn translate(pattern: &str, separator: Option<char>) -> String {
     let mut i = 0;
     while i < bytes.len() {
         let rest = &pattern[i..];
-        match bytes[i] {
-            b'*' if rest.starts_with("**") && separator.is_some() => {
-                // `**.` spans whole segments, including none at all.
-                if rest[2..].starts_with('.') {
-                    out.push_str("(?:[^.]+\\.)*");
+        match (bytes[i], separator) {
+            (b'*', Some(sep)) if rest.starts_with("**") => {
+                // `**` followed by a separator spans whole segments,
+                // including none at all.
+                if rest[2..].starts_with(sep) {
+                    let sep = regex::escape(&sep.to_string());
+                    out.push_str(&format!("(?:[^{sep}]+{sep})*"));
                     i += 3;
                 } else {
                     out.push_str(".*");
                     i += 2;
                 }
             }
-            b'*' => {
-                out.push_str(star);
+            (b'*', _) => {
+                out.push_str(&star);
                 i += 1;
             }
-            b'?' => {
-                out.push_str(question);
+            (b'?', _) => {
+                out.push_str(&question);
                 i += 1;
             }
-            // A trailing `.**` also matches the path with nothing after it.
-            b'.' if separator.is_some() && rest == ".**" => {
-                out.push_str("(?:\\..*)?");
+            // A trailing separator and `**` also matches the path with
+            // nothing after it.
+            (b, Some(sep)) if b as char == sep && rest.len() == 3 && rest.ends_with("**") => {
+                out.push_str(&format!("(?:{}.*)?", regex::escape(&sep.to_string())));
                 i += 3;
             }
             _ => {
@@ -184,6 +199,25 @@ mod tests {
         assert!(Glob::flat("pii:*").is_match("pii:email"));
         assert!(!Glob::flat("pii:*").is_match("entropy"));
         assert!(Glob::flat("entropy").is_match("entropy"));
+    }
+
+    #[test]
+    fn path_globs_use_slashes() {
+        let g = Glob::path("src/*.rs");
+        assert!(g.is_match("src/main.rs"));
+        assert!(!g.is_match("src/a/b.rs"));
+        assert!(Glob::path("*.env").is_match("prod.env"));
+        assert!(Glob::path("a.b").is_match("a.b"), "dots are literal");
+
+        let g = Glob::path("secrets/**");
+        assert!(g.is_match("secrets"));
+        assert!(g.is_match("secrets/a/b.txt"));
+        assert!(!g.is_match("secretsx"));
+
+        let g = Glob::path("**/*.log");
+        assert!(g.is_match("app.log"));
+        assert!(g.is_match("logs/2026/app.log"));
+        assert!(!g.is_match("app.log/x"));
     }
 
     #[test]

@@ -326,3 +326,27 @@ allow:
   # after a detector reports it, these are never looked at, so they never
   # become findings.
   paths: []
+
+
+# ---------------------------------------------------------------------------
+# agent — files AI coding agents must read redacted.
+#
+# Agents given the velociredactor skills read these files through
+# `velociredactor redact` instead of directly, so the model never sees the
+# secrets in them. With `enforce`, agents that support hooks are blocked from
+# reading them any other way. `velociredactor agent init` writes this section;
+# `velociredactor agent check FILE` tells whether a file is covered.
+#
+# Patterns are relative to this file and follow .gitignore conventions: a
+# pattern with no `/` matches a file name in any directory, one with a `/`
+# matches from this directory, and a trailing `/` covers a whole directory.
+# `*` stays within one path segment and `**` spans any number.
+# ---------------------------------------------------------------------------
+# agent:
+#   protected:
+#     - .env*
+#     - "*.pem"
+#     - secrets/
+#   exclude:
+#     - .env.example
+#   enforce: false

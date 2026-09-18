@@ -20,8 +20,12 @@ openblas = ["velociredactor/privacy-filter-openblas"]
 velociredactor = { path = "..", version = "0.1.0", features = ["privacy-filter"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+grep = "0.4"
 hf-hub = { version = "1", features = ["blocking"] }
+ignore = "0.4"
+rayon = "1"
 serde_json = "1"
+termcolor = "1"
 
 # Apple Accelerate is always there on macOS, so the binary uses it.
 [target.'cfg(target_os = "macos")'.dependencies]

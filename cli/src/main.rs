@@ -1,3 +1,5 @@
+mod search;
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -7,6 +9,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
+use velociredactor::agent::AgentPolicy;
 use velociredactor::config::Config;
 use velociredactor::detect::privacy_filter;
 use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor};
@@ -37,6 +40,14 @@ enum Command {
     Redact(RedactArgs),
     /// List the secrets that would be redacted.
     List(ListArgs),
+    /// Search files like ripgrep, printing matches from their redacted text.
+    ///
+    /// Files are searched as they are on disk first. Each file with a match
+    /// is redacted and searched again, and only that second search prints.
+    /// Output never holds a secret, and searching for a secret finds nothing.
+    /// Line numbers count lines of the redacted text, which can be fewer
+    /// than the file's when a multi-line secret becomes one token.
+    Grep(search::GrepArgs),
     /// List the supported input formats.
     Formats,
     /// Print the complete command-line manual.
@@ -47,6 +58,9 @@ enum Command {
     /// Manage the OpenAI model behind the `privacy_filter` detector.
     #[command(subcommand, name = "privacy_filter")]
     PrivacyFilter(PrivacyFilterCommand),
+    /// Choose and check the files AI coding agents must read redacted.
+    #[command(subcommand)]
+    Agent(AgentCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -57,6 +71,60 @@ enum ConfigCommand {
     Location(ConfigArg),
     /// Check that the configuration can be loaded.
     Validate(ConfigArg),
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommand {
+    /// Print the configuration's `agent` section, or that it has none.
+    Status(AgentStatusArgs),
+    /// Print which of the given files agents must read redacted, and exit 1
+    /// if any.
+    Check(AgentCheckArgs),
+    /// Add an `agent` section to the configuration, creating
+    /// `velociredactor.yml` from the built-in configuration if there is none.
+    Init(AgentInitArgs),
+    /// Answer a Claude Code PreToolUse hook: read its JSON on standard input
+    /// and deny reading a protected file when `enforce` is set.
+    Hook(ConfigArg),
+}
+
+#[derive(Debug, Args)]
+struct AgentStatusArgs {
+    #[command(flatten)]
+    config: ConfigArg,
+
+    /// Print the status as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct AgentCheckArgs {
+    /// Files to check. Each is judged by the configuration found from its own
+    /// directory.
+    #[arg(required = true)]
+    files: Vec<PathBuf>,
+
+    #[command(flatten)]
+    config: ConfigArg,
+}
+
+#[derive(Debug, Args)]
+struct AgentInitArgs {
+    /// A path pattern of files to protect. Repeat for more.
+    #[arg(long, value_name = "GLOB", required = true)]
+    protect: Vec<String>,
+
+    /// A path pattern never to protect. Repeat for more.
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
+
+    /// Block agents' direct reads of protected files where they support it.
+    #[arg(long)]
+    enforce: bool,
+
+    #[command(flatten)]
+    config: ConfigArg,
 }
 
 /// Environment variable naming a configuration file that replaces the
@@ -96,6 +164,25 @@ impl ConfigArg {
             return Ok(Some(path.to_owned()));
         }
         discover_config()
+    }
+
+    /// Like [`ConfigArg::resolved_path`], but discovering from `start`
+    /// rather than the current directory.
+    fn resolved_path_from(&self, start: &Path) -> Option<PathBuf> {
+        if let Some(path) = self.explicit_path() {
+            return Some(path.to_owned());
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        discover_from(start, home.as_deref())
+    }
+
+    /// Like [`ConfigArg::resolved_path_from`], with discoveries shared
+    /// between calls.
+    fn resolved_path_cached(&self, start: &Path, discoveries: &mut Discoveries) -> Option<PathBuf> {
+        match self.explicit_path() {
+            Some(path) => Some(path.to_owned()),
+            None => discoveries.discover(start),
+        }
     }
 
     /// The rules to apply, in order: `--config`, `$VELOCIREDACTOR_CONFIG`,
@@ -202,12 +289,17 @@ fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Redact(args) => redact(args),
         Command::List(args) => list(args),
+        Command::Grep(args) => search::grep(args),
         Command::Formats => formats(),
         Command::Man => man(),
         Command::Config(ConfigCommand::Show(args)) => show_config(&args),
         Command::Config(ConfigCommand::Location(args)) => locate_config(&args),
         Command::Config(ConfigCommand::Validate(args)) => validate_config(&args),
         Command::PrivacyFilter(PrivacyFilterCommand::Download(args)) => download_model(args),
+        Command::Agent(AgentCommand::Status(args)) => agent_status(&args),
+        Command::Agent(AgentCommand::Check(args)) => agent_check(&args),
+        Command::Agent(AgentCommand::Init(args)) => agent_init(&args),
+        Command::Agent(AgentCommand::Hook(args)) => agent_hook(&args),
     };
     match result {
         Ok(code) => code,
@@ -301,26 +393,81 @@ fn discover_config() -> Result<Option<PathBuf>> {
 /// repository root (a `.git` file or directory), the home directory when
 /// `start` is inside it, or the filesystem root.
 fn discover_from(start: &Path, home: Option<&Path>) -> Option<PathBuf> {
-    let inside_home = home.is_some_and(|home| start.starts_with(home));
-    let mut dir = start.to_path_buf();
+    let mut dir = start;
     loop {
-        for name in CONFIG_FILE_NAMES {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+        match discover_in(dir, home) {
+            Discovery::Found(path) => return Some(path),
+            Discovery::Stop => return None,
+            Discovery::Parent => dir = dir.parent()?,
         }
+    }
+}
 
-        // Worktrees and some submodules keep `.git` as a file; a normal
-        // clone keeps it as a directory. Either one is the repository root.
-        let at_git_root = dir.join(".git").exists();
-        let at_home_root = inside_home && home.is_some_and(|home| dir == home);
-        if at_git_root || at_home_root || dir.parent().is_none() {
-            return None;
+/// What configuration discovery makes of one directory.
+enum Discovery {
+    /// The directory holds this configuration file.
+    Found(PathBuf),
+    /// The walk ends here with nothing found.
+    Stop,
+    /// The walk goes on to the parent directory.
+    Parent,
+}
+
+fn discover_in(dir: &Path, home: Option<&Path>) -> Discovery {
+    for name in CONFIG_FILE_NAMES {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Discovery::Found(candidate);
         }
-        if !dir.pop() {
-            return None;
+    }
+    // Worktrees and some submodules keep `.git` as a file; a normal clone
+    // keeps it as a directory. Either one is the repository root. The walk
+    // reaches the home directory only when it started inside it.
+    let at_git_root = dir.join(".git").exists();
+    let at_home_root = home.is_some_and(|home| dir == home);
+    if at_git_root || at_home_root || dir.parent().is_none() {
+        Discovery::Stop
+    } else {
+        Discovery::Parent
+    }
+}
+
+/// [`discover_from`] for many starting directories, remembering the answer
+/// for every directory it passes through.
+struct Discoveries {
+    home: Option<PathBuf>,
+    found: std::collections::HashMap<PathBuf, Option<PathBuf>>,
+}
+
+impl Discoveries {
+    fn new() -> Self {
+        Discoveries {
+            home: std::env::var_os("HOME").map(PathBuf::from),
+            found: std::collections::HashMap::new(),
         }
+    }
+
+    fn discover(&mut self, start: &Path) -> Option<PathBuf> {
+        let mut passed = Vec::new();
+        let mut dir = start;
+        let found = loop {
+            if let Some(found) = self.found.get(dir) {
+                break found.clone();
+            }
+            passed.push(dir.to_path_buf());
+            match discover_in(dir, self.home.as_deref()) {
+                Discovery::Found(path) => break Some(path),
+                Discovery::Stop => break None,
+                Discovery::Parent => match dir.parent() {
+                    Some(parent) => dir = parent,
+                    None => break None,
+                },
+            }
+        };
+        for dir in passed {
+            self.found.insert(dir, found.clone());
+        }
+        found
     }
 }
 
@@ -338,6 +485,270 @@ fn validate_config(args: &ConfigArg) -> Result<ExitCode> {
         eprintln!("error: {error}");
     }
     Ok(ExitCode::from(2))
+}
+
+/// The `agent` section of the configuration found from `start`, anchored at
+/// that configuration's directory, if there is one.
+fn agent_policy(args: &ConfigArg, start: &Path) -> Result<Option<AgentPolicy>> {
+    // The built-in configuration never chooses agent files.
+    let Some(path) = args.resolved_path_from(start) else {
+        return Ok(None);
+    };
+    let config = Config::from_path(&path)?;
+    let base =
+        std::path::absolute(&path).with_context(|| format!("resolving {}", path.display()))?;
+    let base = base.parent().unwrap_or(Path::new("/"));
+    Ok(config.agent.map(|agent| AgentPolicy::new(&agent, base)))
+}
+
+/// The directory to discover the configuration of `path` from.
+fn directory_of(path: &Path) -> Result<PathBuf> {
+    let path =
+        std::path::absolute(path).with_context(|| format!("resolving {}", path.display()))?;
+    if path.is_dir() {
+        return Ok(path);
+    }
+    Ok(path.parent().map_or(path.clone(), Path::to_path_buf))
+}
+
+/// Print the configuration's `agent` section.
+fn agent_status(args: &AgentStatusArgs) -> Result<ExitCode> {
+    let path = args.config.resolved_path()?;
+    let config = args.config.load()?;
+    let configured = path.is_some() && config.agent.is_some();
+    let agent = config.agent.unwrap_or_default();
+
+    if args.json {
+        let status = json!({
+            "config": path.as_ref().map(|p| p.display().to_string()),
+            "configured": configured,
+            "protected": agent.protected,
+            "exclude": agent.exclude,
+            "enforce": agent.enforce,
+        });
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    match &path {
+        Some(path) => println!("config:    {}", path.display()),
+        None => println!("config:    [builtin-default]"),
+    }
+    if !configured {
+        println!("agent:     not configured; choose files with `velociredactor agent init`");
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("protected: {}", agent.protected.join(" "));
+    println!("exclude:   {}", agent.exclude.join(" "));
+    println!("enforce:   {}", agent.enforce);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print each file agents must read redacted; exit 1 if there are any.
+fn agent_check(args: &AgentCheckArgs) -> Result<ExitCode> {
+    let mut any = false;
+    for file in &args.files {
+        let policy = agent_policy(&args.config, &directory_of(file)?)?;
+        if policy.is_some_and(|policy| policy.is_protected(file)) {
+            println!("{}", file.display());
+            any = true;
+        }
+    }
+    Ok(if any {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Add an `agent` section to the configuration, creating one if needed.
+fn agent_init(args: &AgentInitArgs) -> Result<ExitCode> {
+    let path = match args.config.resolved_path()? {
+        Some(path) => path,
+        None => {
+            let cwd = std::env::current_dir().context("determining the current directory")?;
+            git_root(&cwd).unwrap_or(cwd).join(CONFIG_FILE_NAMES[0])
+        }
+    };
+
+    let mut source = if path.exists() {
+        let config = Config::from_path(&path)?;
+        if config.agent.is_some() {
+            bail!(
+                "{} already has an agent section; edit it there",
+                path.display()
+            );
+        }
+        fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?
+    } else {
+        // A configuration replaces the built-in one entirely, so start from
+        // all of it rather than from the agent section alone.
+        Config::builtin_source().to_owned()
+    };
+
+    if !source.ends_with('\n') {
+        source.push('\n');
+    }
+    source.push_str(&agent_section(args));
+    fs::write(&path, &source).with_context(|| format!("writing {}", path.display()))?;
+    eprintln!("wrote the agent section to {}", path.display());
+
+    let (errors, warnings) = Config::from_path(&path)?.validate();
+    for warning in warnings {
+        eprintln!("warning: {warning}");
+    }
+    if errors.is_empty() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    for error in errors {
+        eprintln!("error: {error}");
+    }
+    Ok(ExitCode::from(2))
+}
+
+/// The YAML `agent` section `agent init` appends.
+fn agent_section(args: &AgentInitArgs) -> String {
+    // JSON strings are YAML strings, and quoting keeps a leading `*` from
+    // being read as an alias.
+    let list = |globs: &[String]| -> String {
+        globs
+            .iter()
+            .map(|glob| format!("    - {}\n", json!(glob)))
+            .collect()
+    };
+    let mut section = String::from(
+        "\n# Files AI coding agents must read redacted; see `velociredactor agent`.\nagent:\n  protected:\n",
+    );
+    section.push_str(&list(&args.protect));
+    if args.exclude.is_empty() {
+        section.push_str("  exclude: []\n");
+    } else {
+        section.push_str("  exclude:\n");
+        section.push_str(&list(&args.exclude));
+    }
+    section.push_str(&format!("  enforce: {}\n", args.enforce));
+    section
+}
+
+/// The nearest directory at or above `start` holding `.git`.
+fn git_root(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+/// Answer a Claude Code PreToolUse hook.
+///
+/// Claude Code treats exit status 2 as a verdict to block the tool call, so
+/// every failure here exits 1 instead: a broken configuration must not stop
+/// the agent reading anything at all.
+fn agent_hook(args: &ConfigArg) -> Result<ExitCode> {
+    match hook_denial(args) {
+        Ok(Some(reason)) => {
+            let output = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            });
+            println!("{output}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Ok(None) => Ok(ExitCode::SUCCESS),
+        Err(err) => {
+            eprintln!("velociredactor agent hook: {err:#}");
+            Ok(ExitCode::from(1))
+        }
+    }
+}
+
+/// Why the tool call on standard input must be denied, if it must.
+fn hook_denial(args: &ConfigArg) -> Result<Option<String>> {
+    let mut input = String::new();
+    io::stdin()
+        .read_to_string(&mut input)
+        .context("reading the hook input")?;
+    let input: serde_json::Value =
+        serde_json::from_str(&input).context("parsing the hook input")?;
+
+    // `Read` names a `file_path`. `Grep` names a `path`, a file or a
+    // directory, and searches the current directory without one.
+    let tool_input = &input["tool_input"];
+    let grep = input["tool_name"] == "Grep";
+    let Some(target) = tool_input["file_path"]
+        .as_str()
+        .or_else(|| tool_input["path"].as_str())
+        .or(grep.then_some("."))
+    else {
+        return Ok(None);
+    };
+    let target = match input["cwd"].as_str() {
+        Some(cwd) => Path::new(cwd).join(target),
+        None => PathBuf::from(target),
+    };
+
+    let Some(policy) = agent_policy(args, &directory_of(&target)?)? else {
+        return Ok(None);
+    };
+    if !policy.enforce() {
+        return Ok(None);
+    }
+    let Some(protected) = first_protected(&policy, &target) else {
+        return Ok(None);
+    };
+
+    let shown = target.display().to_string();
+    if !grep {
+        return Ok(Some(format!(
+            "{shown} is protected by velociredactor. Read it with \
+             `velociredactor redact {}` instead; redacted values appear as \
+             REDACTION-N tokens.",
+            shell_quote(&shown),
+        )));
+    }
+    let pattern = tool_input["pattern"].as_str().unwrap_or("PATTERN");
+    let within = if protected == target {
+        format!("{shown} is protected by velociredactor")
+    } else {
+        format!(
+            "{shown} holds files protected by velociredactor, such as {}",
+            protected.display()
+        )
+    };
+    Ok(Some(format!(
+        "{within}. Search with `velociredactor grep {} {}` instead: it takes \
+         ripgrep's options and prints matches from redacted text.",
+        shell_quote(pattern),
+        shell_quote(&shown),
+    )))
+}
+
+/// `target` if it is a protected file, or else the first protected file a
+/// search of it would reach, walking as ripgrep does by default but
+/// including hidden files.
+fn first_protected(policy: &AgentPolicy, target: &Path) -> Option<PathBuf> {
+    if !target.is_dir() {
+        return policy.is_protected(target).then(|| target.to_owned());
+    }
+    ignore::WalkBuilder::new(target)
+        .hidden(false)
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .map(ignore::DirEntry::into_path)
+        .find(|path| policy.is_protected(path))
+}
+
+/// `text` quoted for a POSIX shell when it needs to be.
+fn shell_quote(text: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "/._-+=:@%,".contains(c);
+    if !text.is_empty() && text.chars().all(plain) {
+        text.to_owned()
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
 }
 
 fn download_model(args: DownloadArgs) -> Result<ExitCode> {
@@ -782,6 +1193,38 @@ mod tests {
         fs::create_dir(&other).unwrap();
         let want = write_file(outer.path(), "velociredactor.yml");
         assert_eq!(discover_from(&other, Some(&home)), Some(want));
+    }
+
+    #[test]
+    fn cached_discovery_agrees_with_discover_from() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        let nested = repo.join("a/b/c");
+        let configured = repo.join("a/configured/d");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&configured).unwrap();
+        fs::create_dir(repo.join(".git")).unwrap();
+        write_file(&repo.join("a/configured"), "velociredactor.yml");
+        write_file(root.path(), "velociredactor.yml");
+
+        let mut discoveries = Discoveries {
+            home: Some(root.path().to_owned()),
+            found: Default::default(),
+        };
+        // Deepest first, so later lookups hit directories already passed.
+        for dir in [
+            &nested,
+            &configured,
+            &repo.join("a/b"),
+            &repo,
+            &repo.join("a/configured"),
+        ] {
+            assert_eq!(
+                discoveries.discover(dir),
+                discover_from(dir, Some(root.path())),
+                "{dir:?}"
+            );
+        }
     }
 
     #[test]

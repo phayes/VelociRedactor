@@ -1005,3 +1005,506 @@ fn skipped_keys_are_configuration() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), r#"{"session_id":"REDACTION-1"}"#);
 }
+
+/// A scratch git repository holding a `.env` and a source file.
+fn agent_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join(".env"), "DB_PASSWORD=hunter2\n").unwrap();
+    fs::write(dir.path().join(".env.example"), "DB_PASSWORD=changeme\n").unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+    dir
+}
+
+fn agent_init(dir: &Path, args: &[&str]) -> Output {
+    velociredactor_in(dir, dir, &[&["agent", "init"], args].concat(), "")
+}
+
+/// Claude Code's PreToolUse input for reading `file` from `cwd`.
+fn hook_input(cwd: &Path, tool: &str, key: &str, file: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "cwd": cwd,
+        "tool_input": { key: file },
+    })
+    .to_string()
+}
+
+#[test]
+fn agent_status_reports_an_unconfigured_project() {
+    let dir = agent_repo();
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(status["configured"], false);
+    assert_eq!(status["config"], serde_json::Value::Null);
+
+    // A configuration without an agent section is not a choice either.
+    rules_config(dir.path(), "");
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("not configured"), "{}", stdout(&out));
+}
+
+#[test]
+fn agent_init_writes_a_complete_configuration() {
+    let dir = agent_repo();
+    let out = agent_init(
+        dir.path(),
+        &[
+            "--protect",
+            ".env*",
+            "--protect",
+            "*.pem",
+            "--exclude",
+            ".env.example",
+            "--enforce",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let written = fs::read_to_string(dir.path().join("velociredactor.yml")).unwrap();
+    assert!(
+        written.starts_with(BUILTIN),
+        "the built-in rules are kept, comments and all"
+    );
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(status["configured"], true);
+    assert_eq!(status["protected"], serde_json::json!([".env*", "*.pem"]));
+    assert_eq!(status["exclude"], serde_json::json!([".env.example"]));
+    assert_eq!(status["enforce"], true);
+
+    // Redaction is unchanged by the new section.
+    let out = velociredactor_in(dir.path(), dir.path(), &["redact", ".env"], "");
+    assert_eq!(stdout(&out), "DB_PASSWORD=REDACTION-1\n");
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["config", "validate"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+#[test]
+fn agent_init_from_a_subdirectory_writes_at_the_repository_root() {
+    let dir = agent_repo();
+    let out = agent_init(&dir.path().join("src"), &["--protect", ".env"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(dir.path().join("velociredactor.yml").is_file());
+    assert!(!dir.path().join("src/velociredactor.yml").exists());
+}
+
+#[test]
+fn agent_init_appends_to_an_existing_configuration() {
+    let dir = agent_repo();
+    rules_config(dir.path(), "allow:\n  values: [hunter2]\n");
+    let out = agent_init(dir.path(), &["--protect", ".env"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let written = fs::read_to_string(dir.path().join("velociredactor.yml")).unwrap();
+    assert!(
+        written.contains("values: [hunter2]"),
+        "existing rules are kept"
+    );
+    let out = velociredactor_in(dir.path(), dir.path(), &["redact", ".env"], "");
+    assert_eq!(stdout(&out), "DB_PASSWORD=hunter2\n");
+}
+
+#[test]
+fn agent_init_refuses_to_replace_an_agent_section() {
+    let dir = agent_repo();
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env"])
+            .status
+            .success()
+    );
+    let before = fs::read_to_string(dir.path().join("velociredactor.yml")).unwrap();
+
+    let out = agent_init(dir.path(), &["--protect", "*.pem"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        stderr(&out).contains("already has an agent section"),
+        "{}",
+        stderr(&out)
+    );
+    let after = fs::read_to_string(dir.path().join("velociredactor.yml")).unwrap();
+    assert_eq!(before, after);
+
+    let out = agent_init(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(2), "--protect is required");
+}
+
+#[test]
+fn agent_check_exits_1_for_protected_files() {
+    let dir = agent_repo();
+    assert!(
+        agent_init(
+            dir.path(),
+            &["--protect", ".env*", "--exclude", ".env.example"]
+        )
+        .status
+        .success()
+    );
+
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "check", ".env", ".env.example", "src/main.rs"],
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(stdout(&out), ".env\n");
+
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "check", "src/main.rs"],
+        "",
+    );
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(stdout(&out), "");
+
+    // Each file is judged by its own project's configuration, wherever the
+    // command runs from.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let env = dir.path().join(".env");
+    let out = velociredactor_in(
+        elsewhere.path(),
+        elsewhere.path(),
+        &["agent", "check", env.to_str().unwrap()],
+        "",
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+}
+
+#[test]
+fn agent_check_protects_nothing_without_an_agent_section() {
+    let dir = agent_repo();
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "check", ".env"], "");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
+#[test]
+fn agent_hook_denies_protected_reads_only_when_enforced() {
+    let dir = agent_repo();
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env", "--enforce"])
+            .status
+            .success()
+    );
+    let other = tempfile::tempdir().unwrap();
+
+    for (tool, key, instead) in [
+        ("Read", "file_path", "velociredactor redact"),
+        ("Grep", "path", "velociredactor grep"),
+    ] {
+        let out = velociredactor_in(
+            other.path(),
+            other.path(),
+            &["agent", "hook"],
+            &hook_input(dir.path(), tool, key, ".env"),
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+        let reason = hook_denial(&out).expect("the read is denied");
+        assert!(reason.contains(instead), "{reason}");
+    }
+
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "hook"],
+        &hook_input(dir.path(), "Read", "file_path", "src/main.rs"),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "", "unprotected files are allowed silently");
+
+    // Without `enforce` the hook allows everything.
+    let unenforced = agent_repo();
+    assert!(
+        agent_init(unenforced.path(), &["--protect", ".env"])
+            .status
+            .success()
+    );
+    let out = velociredactor_in(
+        unenforced.path(),
+        unenforced.path(),
+        &["agent", "hook"],
+        &hook_input(unenforced.path(), "Read", "file_path", ".env"),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+}
+
+/// The reason a hook's output denies the tool call, if it does.
+fn hook_denial(out: &Output) -> Option<String> {
+    if stdout(out).is_empty() {
+        return None;
+    }
+    let decision: serde_json::Value = serde_json::from_str(&stdout(out)).unwrap();
+    let output = &decision["hookSpecificOutput"];
+    assert_eq!(output["hookEventName"], "PreToolUse");
+    assert_eq!(output["permissionDecision"], "deny");
+    Some(
+        output["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    )
+}
+
+/// A search of a directory reaches every file under it, so it is denied
+/// when any of them is protected.
+#[test]
+fn agent_hook_denies_searching_a_directory_holding_protected_files() {
+    let dir = agent_repo();
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env", "--enforce"])
+            .status
+            .success()
+    );
+    let grep = |input: serde_json::Value| {
+        let input = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Grep",
+            "cwd": dir.path(),
+            "tool_input": input,
+        });
+        velociredactor_in(
+            dir.path(),
+            dir.path(),
+            &["agent", "hook"],
+            &input.to_string(),
+        )
+    };
+
+    let out = grep(serde_json::json!({ "pattern": "DB_", "path": "." }));
+    assert!(out.status.success(), "{}", stderr(&out));
+    let reason = hook_denial(&out).expect("the search is denied");
+    assert!(reason.contains("velociredactor grep DB_ "), "{reason}");
+    assert!(
+        reason.contains(".env"),
+        "names the protected file: {reason}"
+    );
+
+    // Without a path, Grep searches the current directory.
+    let out = grep(serde_json::json!({ "pattern": "DB_" }));
+    assert!(hook_denial(&out).is_some(), "{}", stderr(&out));
+
+    let out = grep(serde_json::json!({ "pattern": "main", "path": "src" }));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(hook_denial(&out), None, "src holds nothing protected");
+
+    // A search skips what .gitignore excludes, as ripgrep does, so it
+    // cannot reach an ignored protected file.
+    fs::write(dir.path().join(".gitignore"), ".env\n").unwrap();
+    let out = grep(serde_json::json!({ "pattern": "DB_", "path": "." }));
+    assert_eq!(hook_denial(&out), None);
+}
+
+/// Claude Code blocks the tool call on exit status 2, so a broken input or
+/// configuration must fail with any other status.
+#[test]
+fn agent_hook_failures_do_not_block() {
+    let dir = agent_repo();
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "hook"], "not json");
+    assert_eq!(out.status.code(), Some(1));
+
+    fs::write(dir.path().join("velociredactor.yml"), "nonsense: 1\n").unwrap();
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "hook"],
+        &hook_input(dir.path(), "Read", "file_path", ".env"),
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+}
+
+/// A git repository holding a secret in a structured file and in a hidden
+/// one, a plain file, and an ignored file.
+fn grep_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::create_dir(root.join("sub")).unwrap();
+    fs::write(
+        root.join("sub/config.yml"),
+        format!("db:\n  host: prod.internal\n  api_key: \"{S}\"\n  user: admin\n"),
+    )
+    .unwrap();
+    fs::write(root.join(".env"), format!("ANTHROPIC_KEY={S}\nOTHER=1\n")).unwrap();
+    fs::write(root.join("readme.txt"), "nothing here\n").unwrap();
+    fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+    fs::write(root.join("ignored.txt"), "api_key in an ignored file\n").unwrap();
+    dir
+}
+
+fn grep_in(dir: &Path, args: &[&str]) -> Output {
+    velociredactor_in(dir, dir, &[&["grep"], args].concat(), "")
+}
+
+#[test]
+fn grep_prints_matches_from_redacted_text() {
+    let dir = grep_repo();
+    let out = grep_in(dir.path(), &["-C1", "api_key"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "sub/config.yml-2-  host: prod.internal\n\
+         sub/config.yml:3:  api_key: \"REDACTION-1\"\n\
+         sub/config.yml-4-  user: admin\n"
+    );
+}
+
+#[test]
+fn grep_for_a_secret_finds_nothing() {
+    let dir = grep_repo();
+    for args in [
+        &["--hidden", S][..],
+        &["--hidden", "-F", "-e", "sk-ant-api03"],
+        &["-o", "--hidden", "sk-ant-[a-z0-9-]+"],
+    ] {
+        let out = grep_in(dir.path(), args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+        assert_eq!(stdout(&out), "", "{args:?}");
+    }
+}
+
+#[test]
+fn grep_output_never_holds_a_secret() {
+    let dir = grep_repo();
+    for args in [
+        &["--hidden", "-e", "."][..],
+        &["--hidden", "-o", "-e", "=.*"],
+        &["--hidden", "--json", "KEY|key"],
+        &["--hidden", "-v", "zzz"],
+    ] {
+        let out = grep_in(dir.path(), args);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        let text = stdout(&out);
+        assert!(!text.contains(S), "{args:?}: {text}");
+        assert!(text.contains("REDACTION-1"), "{args:?}: {text}");
+    }
+}
+
+#[test]
+fn grep_summary_modes() {
+    let dir = grep_repo();
+    let out = grep_in(dir.path(), &["-l", "--hidden", "-e", "="]);
+    assert_eq!(stdout(&out), ".env\n");
+
+    // The file matched on disk, but not once redacted.
+    let out = grep_in(dir.path(), &["--files-without-match", "sk-ant"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "readme.txt\nsub/config.yml\n");
+
+    let out = grep_in(dir.path(), &["-c", "host|user", "sub/config.yml"]);
+    assert_eq!(stdout(&out), "2\n");
+
+    let out = grep_in(dir.path(), &["-q", "host"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(stdout(&out), "");
+    let out = grep_in(dir.path(), &["-q", "absent"]);
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn grep_honors_ignore_files_and_hidden_files() {
+    let dir = grep_repo();
+    let out = grep_in(dir.path(), &["-l", "-e", "."]);
+    assert_eq!(stdout(&out), "readme.txt\nsub/config.yml\n");
+
+    let out = grep_in(dir.path(), &["-l", "--no-ignore", "ignored"]);
+    assert_eq!(stdout(&out), "ignored.txt\n");
+
+    let out = grep_in(dir.path(), &["-l", "-g", "*.yml", "-e", "."]);
+    assert_eq!(stdout(&out), "sub/config.yml\n");
+}
+
+#[test]
+fn grep_reads_standard_input() {
+    let out = velociredactor(&["grep", "token", "-"], &format!("token: {S}\nother\n"));
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "1:token: REDACTION-1\n");
+}
+
+#[test]
+fn grep_needs_a_pattern() {
+    let dir = grep_repo();
+    let out = grep_in(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("no pattern"), "{}", stderr(&out));
+}
+
+#[test]
+fn grep_reports_unreadable_paths() {
+    let dir = grep_repo();
+    let out = grep_in(dir.path(), &["host", "missing.txt", "sub"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stdout(&out), "sub/config.yml:2:  host: prod.internal\n");
+}
+
+#[test]
+fn grep_stops_at_a_broken_configuration() {
+    let dir = grep_repo();
+    fs::write(dir.path().join("sub/velociredactor.yml"), "nonsense: 1\n").unwrap();
+    fs::create_dir(dir.path().join("zzz")).unwrap();
+    fs::write(dir.path().join("zzz/later.txt"), "host\n").unwrap();
+    // `readme.txt` comes first and uses the built-in configuration.
+    let out = grep_in(dir.path(), &["-e", "."]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        stdout(&out),
+        "readme.txt:1:nothing here\n",
+        "nothing after the failure"
+    );
+    let err = stderr(&out);
+    assert!(err.contains("velociredactor.yml"), "{err}");
+    assert_eq!(err.matches("error:").count(), 1, "{err}");
+}
+
+#[test]
+fn grep_loads_a_configuration_only_when_a_file_using_it_matches() {
+    let dir = grep_repo();
+    fs::write(dir.path().join("sub/velociredactor.yml"), "nonsense: 1\n").unwrap();
+    let out = grep_in(dir.path(), &["nothing"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "readme.txt:1:nothing here\n");
+    assert_eq!(stderr(&out), "");
+}
+
+#[test]
+fn grep_redacts_each_file_by_its_own_configuration() {
+    let dir = grep_repo();
+    fs::write(dir.path().join("secret.txt"), format!("api_key: \"{S}\"\n")).unwrap();
+    // The subdirectory leaves the secret in place; the root does not.
+    write_config(
+        &dir.path().join("sub"),
+        NO_EDITS,
+        &format!("allow:\n  values: [\"{S}\"]\n"),
+    );
+    let out = grep_in(dir.path(), &["-g", "!velociredactor.yml", "api_key"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!("secret.txt:1:api_key: \"REDACTION-1\"\nsub/config.yml:3:  api_key: \"{S}\"\n")
+    );
+}
+
+#[test]
+fn grep_prints_files_in_path_order() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    let mut want = String::new();
+    for i in 0..300 {
+        let name = format!("f{i:03}.env");
+        fs::write(dir.path().join(&name), format!("KEY={S}\nline {i}\n")).unwrap();
+        want.push_str(&format!("{name}:1:KEY=REDACTION-1\n{name}-2-line {i}\n"));
+        if i < 299 {
+            want.push_str("--\n");
+        }
+    }
+    let out = grep_in(dir.path(), &["-A1", "KEY"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), want);
+}

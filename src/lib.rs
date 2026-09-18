@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.crate.md")]
 #![deny(missing_docs)]
 
+pub mod agent;
 pub mod config;
 pub mod detect;
 mod error;

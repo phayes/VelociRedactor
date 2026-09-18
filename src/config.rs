@@ -38,6 +38,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
+use crate::agent::AgentConfig;
 use crate::detect::{DetectorConfig, PlaceholderConfig, Placeholders};
 use crate::format::{self, FormatRegistry};
 use crate::policy::{ConfigPolicy, PolicyConfig};
@@ -66,6 +67,10 @@ pub struct Config {
     /// What to leave unredacted. The last word over every detector.
     #[serde(default)]
     pub allow: AllowRules,
+    /// Files AI coding agents must read redacted. Absent until a project
+    /// chooses them.
+    #[serde(default)]
+    pub agent: Option<AgentConfig>,
 }
 
 /// Values, patterns, and key paths that survive redaction.
@@ -186,6 +191,14 @@ impl Config {
 
         if let Err(error) = self.allow() {
             errors.push(error.to_string());
+        }
+
+        if self
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.protected.is_empty())
+        {
+            warnings.push("the agent section protects no files".to_owned());
         }
 
         (errors, warnings)
@@ -349,6 +362,56 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("pii:ssn"), "{err}");
+    }
+
+    #[test]
+    fn the_builtin_configuration_chooses_no_agent_files() {
+        assert!(Config::builtin().agent.is_none());
+    }
+
+    /// The commented-out `agent` section, uncommented, parses as shown.
+    #[test]
+    fn the_documented_agent_section_parses() {
+        let source = Config::builtin_source();
+        let start = source.find("# agent:").expect("the example is documented");
+        let example: String = source[start..]
+            .lines()
+            .map(|line| line.strip_prefix("# ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let config = Config::from_yaml(&format!("{source}\n{example}\n")).unwrap();
+        let agent = config.agent.as_ref().expect("the section is present");
+        assert_eq!(agent.protected, [".env*", "*.pem", "secrets/"]);
+        assert_eq!(agent.exclude, [".env.example"]);
+        assert!(!agent.enforce);
+        let (errors, warnings) = config.validate();
+        assert!(
+            errors.is_empty() && warnings.is_empty(),
+            "{errors:?} {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_agent_section_protecting_nothing_is_a_warning() {
+        let config = Config::from_yaml(&format!(
+            "{}\nagent:\n  enforce: true\n",
+            Config::builtin_source()
+        ))
+        .unwrap();
+        let (errors, warnings) = config.validate();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(warnings.iter().any(|w| w.contains("agent")), "{warnings:?}");
+    }
+
+    #[test]
+    fn unknown_agent_keys_are_rejected() {
+        let err = Config::from_yaml(&format!(
+            "{}\nagent:\n  protect: [.env]\n",
+            Config::builtin_source()
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("protect"), "{err}");
     }
 
     /// A build made with fewer Cargo features still uses the built-in
