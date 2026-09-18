@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use expr::{Context, Environment, Program, Value};
@@ -26,7 +26,7 @@ use include_dir::{Dir, include_dir};
 use indexmap::IndexMap;
 use memchr::memmem;
 use regex::Regex;
-use regex::bytes::Regex as BytesRegex;
+use regex::bytes::{Regex as BytesRegex, RegexSet as BytesRegexSet};
 use serde::Deserialize;
 
 use super::entropy::shannon_entropy;
@@ -65,9 +65,13 @@ fn default_toml() -> &'static str {
 /// ```
 ///
 /// The rules behind it are shared, so cloning it is cheap and the 486 KB of
-/// TOML is parsed once per process.
-pub static BETTERLEAKS_RULESET: LazyLock<RulesetDetector> =
-    LazyLock::new(|| RulesetDetector::from_toml(default_toml()).expect("bundled ruleset is valid"));
+/// TOML is parsed once per process. Each rule regex is compiled the first
+/// time that rule is a candidate. The global filter and each rule filter
+/// compile the first time a regex match needs them.
+pub static BETTERLEAKS_RULESET: LazyLock<RulesetDetector> = LazyLock::new(|| {
+    let raw = parse_toml(default_toml(), "builtin:betterleaks").expect("bundled ruleset is TOML");
+    RulesetDetector::build_deferred(raw).expect("bundled ruleset is valid")
+});
 
 /// The `ruleset` detector's settings.
 #[derive(Debug, Clone, Deserialize)]
@@ -168,7 +172,7 @@ impl RulesetDetector {
                         Some(previous) => previous.extended_by(raw),
                     });
                 }
-                Self::build(combined.unwrap_or_default())?
+                Self::build(combined.unwrap_or_default(), false)?
             }
         };
         detector.placeholders = placeholders.clone();
@@ -184,7 +188,7 @@ impl RulesetDetector {
 
     /// A ruleset with no rules.
     pub fn empty() -> Self {
-        Self::build(RawConfig::default()).expect("empty ruleset is valid")
+        Self::build(RawConfig::default(), false).expect("empty ruleset is valid")
     }
 
     /// Parse a ruleset. If it sets `[extend] useDefault = true`, the bundled
@@ -195,7 +199,11 @@ impl RulesetDetector {
             let base = parse_toml(default_toml(), "builtin:betterleaks")?;
             config = base.extended_by(config);
         }
-        Self::build(config)
+        Self::build(config, false)
+    }
+
+    fn build_deferred(config: RawConfig) -> Result<Self, Error> {
+        Self::build(config, true)
     }
 
     /// Read and compile a ruleset from a TOML file.
@@ -237,8 +245,8 @@ impl RulesetDetector {
         self.inner.rules.iter().map(|r| r.id.as_str())
     }
 
-    fn build(config: RawConfig) -> Result<Self, Error> {
-        Ruleset::build(config).map(|inner| Self {
+    fn build(config: RawConfig, defer: bool) -> Result<Self, Error> {
+        Ruleset::build(config, defer).map(|inner| Self {
             inner: Arc::new(inner),
             placeholders: Placeholders::default(),
             allow_signatures: default_allow_signatures().into(),
@@ -256,6 +264,16 @@ struct ScanCtx<'a> {
     placeholders: &'a Placeholders,
     allow_signatures: &'a [String],
     exclude_rules: &'a [Glob],
+}
+
+/// Inputs shared by every match of one rule.
+#[derive(Clone, Copy)]
+struct PrimarySearch<'a> {
+    rule: &'a Rule,
+    regex: &'a BytesRegex,
+    value: &'a str,
+    lines: &'a LineIndex,
+    scan: &'a ScanCtx<'a>,
 }
 
 impl Detector for RulesetDetector {
@@ -353,11 +371,21 @@ struct Rule {
     id: String,
     /// `None` for rules that never apply to bare values (path-only or
     /// path-restricted rules).
-    regex: Option<BytesRegex>,
+    pattern: Option<String>,
+    compiled: OnceLock<Option<BytesRegex>>,
     secret_group: usize,
     skip_report: bool,
     components: Vec<Component>,
     filter: Option<Filter>,
+}
+
+impl Rule {
+    fn regex(&self) -> Option<&BytesRegex> {
+        let pattern = self.pattern.as_deref()?;
+        self.compiled
+            .get_or_init(|| compile_rule_regex(pattern).ok())
+            .as_ref()
+    }
 }
 
 struct Component {
@@ -386,8 +414,32 @@ enum Window {
 }
 
 struct Filter {
-    program: Program,
+    source: String,
+    compiled: OnceLock<Option<Program>>,
     uses_fragment: bool,
+}
+
+impl Filter {
+    fn from_source(source: String) -> Self {
+        Self {
+            uses_fragment: source.contains("fragment_raw"),
+            source,
+            compiled: OnceLock::new(),
+        }
+    }
+
+    fn compiled(source: String) -> Result<Self, String> {
+        let program = compile_filter_program(&source)?;
+        let filter = Self::from_source(source);
+        let _ = filter.compiled.set(Some(program));
+        Ok(filter)
+    }
+
+    fn program(&self) -> Option<&Program> {
+        self.compiled
+            .get_or_init(|| compile_filter_program(&self.source).ok())
+            .as_ref()
+    }
 }
 
 struct Ruleset {
@@ -395,12 +447,15 @@ struct Ruleset {
     keywords: Option<AhoCorasick>,
     keyword_rules: Vec<Vec<usize>>,
     keywordless_rules: Vec<usize>,
+    /// Patterns for keywordless reporting rules, compiled on first scan.
+    keywordless_patterns: Vec<(usize, String)>,
+    keywordless_set: OnceLock<Option<(BytesRegexSet, Vec<usize>)>>,
     global_filter: Option<Filter>,
     env: Environment<'static>,
 }
 
 impl Ruleset {
-    fn build(config: RawConfig) -> Result<Self, Error> {
+    fn build(config: RawConfig, defer: bool) -> Result<Self, Error> {
         let index: HashMap<String, usize> = config
             .rules
             .iter()
@@ -413,13 +468,15 @@ impl Ruleset {
         let mut keyword_list: Vec<String> = Vec::new();
         let mut keyword_rules: Vec<Vec<usize>> = Vec::new();
         let mut keywordless_rules = Vec::new();
+        let mut keywordless_patterns: Vec<(usize, String)> = Vec::new();
 
         for (i, raw) in config.rules.into_iter().enumerate() {
             let fail = |msg: String| Error::Ruleset(format!("rule {:?}: {msg}", raw.id));
             let Some(pattern) = raw.regex.as_deref().filter(|_| raw.path.is_none()) else {
                 rules.push(Rule {
                     id: raw.id,
-                    regex: None,
+                    pattern: None,
+                    compiled: OnceLock::new(),
                     secret_group: 0,
                     skip_report: true,
                     components: Vec::new(),
@@ -427,12 +484,25 @@ impl Ruleset {
                 });
                 continue;
             };
-            let regex = compile_rule_regex(pattern).map_err(|e| fail(e.to_string()))?;
-            if raw.secret_group >= regex.captures_len() {
-                return Err(fail(format!(
-                    "secretGroup {} exceeds the number of capture groups",
-                    raw.secret_group
-                )));
+            let compiled = OnceLock::new();
+            if defer {
+                let captures_len =
+                    pattern_captures_len(pattern).map_err(|e| fail(e.to_string()))?;
+                if raw.secret_group >= captures_len {
+                    return Err(fail(format!(
+                        "secretGroup {} exceeds the number of capture groups",
+                        raw.secret_group
+                    )));
+                }
+            } else {
+                let regex = compile_rule_regex(pattern).map_err(|e| fail(e.to_string()))?;
+                if raw.secret_group >= regex.captures_len() {
+                    return Err(fail(format!(
+                        "secretGroup {} exceeds the number of capture groups",
+                        raw.secret_group
+                    )));
+                }
+                let _ = compiled.set(Some(regex));
             }
 
             let mut components = Vec::new();
@@ -476,12 +546,21 @@ impl Ruleset {
                 filter_parts.push(f.to_owned());
             }
             let filter = compose_filter(&filter_parts)
-                .map(|source| compile_filter(&source))
+                .map(|source| {
+                    if defer {
+                        Ok(Filter::from_source(source))
+                    } else {
+                        Filter::compiled(source)
+                    }
+                })
                 .transpose()
                 .map_err(fail)?;
 
             if raw.keywords.is_empty() {
                 keywordless_rules.push(i);
+                if !raw.skip_report {
+                    keywordless_patterns.push((i, pattern.to_owned()));
+                }
             }
             for keyword in &raw.keywords {
                 let keyword = keyword.to_lowercase();
@@ -495,7 +574,8 @@ impl Ruleset {
 
             rules.push(Rule {
                 id: raw.id,
-                regex: Some(regex),
+                pattern: Some(pattern.to_owned()),
+                compiled,
                 secret_group: raw.secret_group,
                 skip_report: raw.skip_report,
                 components,
@@ -519,15 +599,28 @@ impl Ruleset {
             .filter
             .as_deref()
             .filter(|f| !f.trim().is_empty())
-            .map(compile_filter)
+            .map(|source| {
+                if defer {
+                    Ok(Filter::from_source(source.to_owned()))
+                } else {
+                    Filter::compiled(source.to_owned())
+                }
+            })
             .transpose()
             .map_err(|e| Error::Ruleset(format!("global filter: {e}")))?;
+
+        let keywordless_set = OnceLock::new();
+        if !defer {
+            let _ = keywordless_set.set(compile_keywordless_set(&keywordless_patterns));
+        }
 
         Ok(Self {
             rules,
             keywords,
             keyword_rules,
             keywordless_rules,
+            keywordless_patterns,
+            keywordless_set,
             global_filter,
             env: filter_environment(),
         })
@@ -546,8 +639,17 @@ impl Ruleset {
                 }
             }
         }
-        for &rule in &self.keywordless_rules {
-            candidates[rule] = true;
+        if let Some((set, map)) = self
+            .keywordless_set
+            .get_or_init(|| compile_keywordless_set(&self.keywordless_patterns))
+        {
+            for idx in set.matches(bytes) {
+                candidates[map[idx]] = true;
+            }
+        } else {
+            for &rule in &self.keywordless_rules {
+                candidates[rule] = true;
+            }
         }
 
         let lines = LineIndex::new(bytes);
@@ -630,73 +732,103 @@ impl Ruleset {
         lines: &LineIndex,
         scan: &ScanCtx<'_>,
     ) -> Vec<Finding> {
-        let Some(regex) = &rule.regex else {
+        let Some(regex) = rule.regex() else {
             return Vec::new();
         };
         let bytes = value.as_bytes();
-        let mut findings = Vec::new();
-        for m in regex.find_iter(bytes) {
-            let matched = trim_newlines(m.as_bytes());
-            if matched.is_empty() {
-                continue;
-            }
-            let start = m.start();
-            let end = start + matched.len();
-            let line = &bytes[lines.line_range(start, end)];
-            if scan
-                .allow_signatures
-                .iter()
-                .any(|sig| memmem::find(line, sig.as_bytes()).is_some())
-            {
-                continue;
-            }
-
-            let mut secret = matched;
-            let mut captures = IndexMap::new();
-            if let Some(groups) = regex.captures(matched)
-                && groups.len() >= 2
-            {
-                if rule.secret_group > 0 {
-                    secret = groups
-                        .get(rule.secret_group)
-                        .map_or(&[][..], |g| g.as_bytes());
-                } else if let Some(g) = groups.iter().skip(1).flatten().find(|g| !g.is_empty()) {
-                    secret = g.as_bytes();
-                }
-                for (i, name) in regex.capture_names().enumerate() {
-                    if let (Some(name), Some(g)) = (name, groups.get(i))
-                        && !g.is_empty()
-                    {
-                        captures.insert(
-                            name.to_owned(),
-                            Value::String(String::from_utf8_lossy(g.as_bytes()).into_owned()),
-                        );
-                    }
-                }
-            }
-
-            let candidate = Candidate {
-                value,
-                match_range: m.range(),
-                matched,
-                secret,
-                line,
-                captures,
-            };
-            if self.filtered(rule, &candidate) {
-                continue;
-            }
-            let start_line = lines.line_of(start);
-            findings.push(Finding {
-                secret: secret.to_vec(),
-                start,
-                end,
-                start_line,
-                end_line: lines.line_of(end.saturating_sub(1).max(start)),
-                start_col: start - lines.line_start(start_line),
-            });
+        let search = PrimarySearch {
+            rule,
+            regex,
+            value,
+            lines,
+            scan,
+        };
+        if regex.captures_len() < 2 {
+            regex
+                .find_iter(bytes)
+                .filter_map(|m| self.primary_finding(&search, m, None))
+                .collect()
+        } else {
+            regex
+                .captures_iter(bytes)
+                .filter_map(|groups| {
+                    let m = groups.get(0)?;
+                    self.primary_finding(&search, m, Some(groups))
+                })
+                .collect()
         }
-        findings
+    }
+
+    fn primary_finding(
+        &self,
+        search: &PrimarySearch<'_>,
+        m: regex::bytes::Match<'_>,
+        groups: Option<regex::bytes::Captures<'_>>,
+    ) -> Option<Finding> {
+        let PrimarySearch {
+            rule,
+            regex,
+            value,
+            lines,
+            scan,
+        } = *search;
+        let matched = trim_newlines(m.as_bytes());
+        if matched.is_empty() {
+            return None;
+        }
+        let start = m.start();
+        let end = start + matched.len();
+        let line = &value.as_bytes()[lines.line_range(start, end)];
+        if scan
+            .allow_signatures
+            .iter()
+            .any(|sig| memmem::find(line, sig.as_bytes()).is_some())
+        {
+            return None;
+        }
+
+        let mut secret = matched;
+        let mut captures = IndexMap::new();
+        if let Some(groups) = groups.as_ref() {
+            if rule.secret_group > 0 {
+                secret = groups
+                    .get(rule.secret_group)
+                    .map_or(&[][..], |g| g.as_bytes());
+            } else if let Some(g) = groups.iter().skip(1).flatten().find(|g| !g.is_empty()) {
+                secret = g.as_bytes();
+            }
+            for (i, name) in regex.capture_names().enumerate() {
+                if let (Some(name), Some(g)) = (name, groups.get(i))
+                    && !g.is_empty()
+                {
+                    captures.insert(
+                        name.to_owned(),
+                        Value::String(String::from_utf8_lossy(g.as_bytes()).into_owned()),
+                    );
+                }
+            }
+        }
+
+        let candidate = Candidate {
+            value,
+            match_range: m.range(),
+            matched,
+            secret,
+            line,
+            captures,
+        };
+        if self.filtered(rule, &candidate) {
+            return None;
+        }
+        let start_line = lines.line_of(start);
+        Some(Finding {
+            secret: secret.to_vec(),
+            start,
+            end,
+            start_line,
+            end_line: lines.line_of(end.saturating_sub(1).max(start)),
+            start_col: start - lines.line_start(start_line),
+        })
     }
 
     fn filtered(&self, rule: &Rule, candidate: &Candidate<'_>) -> bool {
@@ -710,9 +842,12 @@ impl Ruleset {
             .into_iter()
             .flatten()
             .any(|filter| {
-                // A filter that fails to evaluate keeps the finding: when in
-                // doubt, redact.
-                matches!(self.env.run(&filter.program, &ctx), Ok(Value::Bool(true)))
+                // A filter that fails to compile or evaluate keeps the
+                // finding: when in doubt, redact.
+                let Some(program) = filter.program() else {
+                    return false;
+                };
+                matches!(self.env.run(program, &ctx), Ok(Value::Bool(true)))
             })
     }
 }
@@ -865,13 +1000,62 @@ fn snap_to_chars(s: &str, mut range: Range<usize>) -> Range<usize> {
     range
 }
 
+/// Lazy DFA transition cache per regex, in bytes.
+///
+/// The crate default is 2 MiB. Large betterleaks expressions refill that
+/// cache on long haystacks; 8 MiB is a cap on what one search may use, not
+/// an allocation paid up front.
+const RULE_DFA_CACHE: usize = 8 * (1 << 20);
+
+/// The number of capture groups `regex::bytes::Regex` would report, including
+/// the implicit whole-match group.
+fn pattern_captures_len(pattern: &str) -> Result<usize, String> {
+    Ok(1 + parse_rule_hir(pattern)?
+        .properties()
+        .explicit_captures_len())
+}
+
+fn parse_rule_hir(pattern: &str) -> Result<regex_syntax::hir::Hir, String> {
+    let bytes = regex_syntax::ParserBuilder::new()
+        .unicode(false)
+        .utf8(false)
+        .build()
+        .parse(pattern);
+    match bytes {
+        Ok(hir) => Ok(hir),
+        Err(first) => regex_syntax::ParserBuilder::new()
+            .build()
+            .parse(pattern)
+            .map_err(|_| first.to_string()),
+    }
+}
+
 /// Rules are written for Go's RE2, where `\w`, `\d`, `\s`, and `\b` are
 /// ASCII-only. Matching bytes with Unicode disabled gives the same behavior.
 fn compile_rule_regex(pattern: &str) -> Result<BytesRegex, regex::Error> {
     regex::bytes::RegexBuilder::new(pattern)
         .unicode(false)
+        .dfa_size_limit(RULE_DFA_CACHE)
         .build()
         .or_else(|_| BytesRegex::new(pattern))
+}
+
+/// One scan that names every keywordless reporting rule that can match.
+///
+/// Compilation can fail when the combined set exceeds regex size limits; the
+/// caller then falls back to running every keywordless rule.
+fn compile_keywordless_set(patterns: &[(usize, String)]) -> Option<(BytesRegexSet, Vec<usize>)> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let build = |unicode: bool| {
+        regex::bytes::RegexSetBuilder::new(patterns.iter().map(|(_, p)| p.as_str()))
+            .unicode(unicode)
+            .dfa_size_limit(RULE_DFA_CACHE)
+            .build()
+    };
+    let set = build(false).or_else(|_| build(true)).ok()?;
+    Some((set, patterns.iter().map(|(i, _)| *i).collect()))
 }
 
 /// Parse a proximity spec such as `5L`, `7L,200C`, `-2L,+3L`, or `80C`.
@@ -952,13 +1136,9 @@ fn compose_filter(parts: &[String]) -> Option<String> {
     }
 }
 
-fn compile_filter(source: &str) -> Result<Filter, String> {
+fn compile_filter_program(source: &str) -> Result<Program, String> {
     let rewritten = flatten_namespaces(source);
-    let program = expr::compile(&rewritten).map_err(|e| format!("invalid filter: {e}"))?;
-    Ok(Filter {
-        program,
-        uses_fragment: source.contains("fragment_raw"),
-    })
+    expr::compile(&rewritten).map_err(|e| format!("invalid filter: {e}"))
 }
 
 /// Rewrite `filter.name(` calls to `filter_name(`, leaving string literals
@@ -1214,6 +1394,129 @@ mod tests {
     }
 
     #[test]
+    fn deferred_rules_compile_on_first_candidate() {
+        let raw = parse_toml(
+            r#"
+[[rules]]
+id = "hit"
+regex = '''HIT_[A-Z0-9]{8}'''
+keywords = ["HIT_"]
+
+[[rules]]
+id = "other"
+regex = '''OTHER_[A-Z]{8}'''
+keywords = ["OTHER_"]
+"#,
+            "test",
+        )
+        .unwrap();
+        let rules = RulesetDetector::build_deferred(raw).unwrap();
+        assert!(rules.inner.rules.iter().all(|r| r.compiled.get().is_none()));
+        assert_eq!(secrets(&rules, "export tok=HIT_ABCD1234"), ["HIT_ABCD1234"]);
+        let compiled: Vec<&str> = rules
+            .inner
+            .rules
+            .iter()
+            .filter(|r| r.compiled.get().and_then(Option::as_ref).is_some())
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(compiled, ["hit"]);
+    }
+
+    #[test]
+    fn deferred_filters_compile_on_first_match() {
+        let raw = parse_toml(
+            r#"
+filter = '''finding["secret"] == "DROP_ME"'''
+
+[[rules]]
+id = "hit"
+regex = '''HIT_[A-Z0-9]{8}'''
+keywords = ["HIT_"]
+filter = '''false'''
+
+[[rules]]
+id = "other"
+regex = '''OTHER_[A-Z]{8}'''
+keywords = ["OTHER_"]
+filter = '''false'''
+"#,
+            "test",
+        )
+        .unwrap();
+        let rules = RulesetDetector::build_deferred(raw).unwrap();
+        assert!(
+            rules
+                .inner
+                .global_filter
+                .as_ref()
+                .unwrap()
+                .compiled
+                .get()
+                .is_none()
+        );
+        assert!(
+            rules
+                .inner
+                .rules
+                .iter()
+                .all(|r| r.filter.as_ref().unwrap().compiled.get().is_none())
+        );
+        assert_eq!(secrets(&rules, "export tok=HIT_ABCD1234"), ["HIT_ABCD1234"]);
+        assert!(
+            rules
+                .inner
+                .global_filter
+                .as_ref()
+                .unwrap()
+                .compiled
+                .get()
+                .is_some()
+        );
+        let compiled: Vec<&str> = rules
+            .inner
+            .rules
+            .iter()
+            .filter(|r| {
+                r.filter
+                    .as_ref()
+                    .is_some_and(|f| f.compiled.get().is_some())
+            })
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(compiled, ["hit"]);
+    }
+
+    #[test]
+    fn from_toml_rejects_a_bad_pattern() {
+        let err = RulesetDetector::from_toml("[[rules]]\nid = \"bad\"\nregex = '''(unclosed'''\n")
+            .unwrap_err();
+        assert!(err.to_string().contains("bad"), "{err}");
+    }
+
+    #[test]
+    fn from_toml_rejects_a_bad_filter() {
+        let err = RulesetDetector::from_toml(
+            "[[rules]]\nid = \"bad\"\nregex = '''ok'''\nfilter = '''((('''\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("bad"), "{err}");
+        assert!(err.to_string().contains("filter"), "{err}");
+    }
+
+    #[test]
+    fn capture_count_matches_compiled_regex() {
+        for pattern in [r"abc", r"(a)(b)", r"(?P<name>tok)_([0-9]+)", r"\w+"] {
+            let compiled = compile_rule_regex(pattern).unwrap();
+            assert_eq!(
+                pattern_captures_len(pattern).unwrap(),
+                compiled.captures_len(),
+                "{pattern}"
+            );
+        }
+    }
+
+    #[test]
     fn finds_known_token_formats() {
         let rules = &*BETTERLEAKS_RULESET;
         let token = "ghp_R4nd0mT0k3nV4lu3AbCdEfGhIjKlMnOpQr12";
@@ -1263,6 +1566,30 @@ keywords = ["acme_key"]
         );
         assert!(secrets(&rules, r#"acme_key = "aaaaaaaaaa""#).is_empty());
         assert!(secrets(&rules, r#"other = "x9f3k2m8q7w1z5""#).is_empty());
+    }
+
+    #[test]
+    fn keywordless_rules_use_the_regex_set() {
+        let rules = RulesetDetector::from_toml(
+            r#"
+[[rules]]
+id = "bare"
+regex = '''BARE_[0-9]{8}'''
+"#,
+        )
+        .unwrap();
+        assert!(
+            rules
+                .inner
+                .keywordless_set
+                .get()
+                .is_some_and(|set| set.is_some())
+        );
+        assert_eq!(
+            secrets(&rules, "prefix BARE_12345678 suffix"),
+            ["BARE_12345678"]
+        );
+        assert!(secrets(&rules, "nothing that looks like a secret").is_empty());
     }
 
     #[test]
@@ -1339,7 +1666,11 @@ filter.matchesAny(before, [`test `])
             .chain(inner.global_filter.iter().map(|f| ("<global>", f)));
         for (id, filter) in filters {
             let ctx = candidate.context(id, true);
-            match inner.env.run(&filter.program, &ctx) {
+            let Some(program) = filter.program() else {
+                failures.push(format!("{id}: failed to compile"));
+                continue;
+            };
+            match inner.env.run(program, &ctx) {
                 Ok(Value::Bool(_)) => {}
                 other => failures.push(format!("{id}: {other:?}")),
             }

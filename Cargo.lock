@@ -6253,6 +6253,7 @@ dependencies = [
  "quick-xml",
  "rayon",
  "regex",
+ "regex-syntax",
  "saphyr-parser",
  "serde",
  "serde_json",
