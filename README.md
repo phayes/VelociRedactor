@@ -18,7 +18,7 @@ This README is the command-line manual. For the Rust library, see the [`velocire
 From a checkout:
 
 ```console
-cargo install velociredactor
+cargo install velociredactor-cli
 ```
 
 The binary includes the default rules and all supported structured formats. It also includes the optional OpenAI Privacy Filter detector; that model is downloaded separately and is disabled in the default configuration.
