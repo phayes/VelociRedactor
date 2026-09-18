@@ -66,12 +66,6 @@ const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
 /// The complete command-line manual embedded in the binary.
 const CLI_README: &str = include_str!("../../README.md");
 
-/// The README logo markup omitted from terminal output.
-const CLI_README_LOGO: &str = concat!(
-    r#"<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="velociredactor logo" width="420"></p>"#,
-    "\n\n"
-);
-
 /// Names accepted for a discovered configuration file, in preference order.
 const CONFIG_FILE_NAMES: [&str; 2] = ["velociredactor.yml", "VELOCIREDACTOR.yml"];
 
@@ -469,7 +463,10 @@ fn formats() -> Result<ExitCode> {
 
 /// Print the complete command-line manual.
 fn man() -> Result<ExitCode> {
-    let manual = CLI_README.replacen(CLI_README_LOGO, "", 1);
+    let manual: String = CLI_README
+        .split_inclusive('\n')
+        .filter(|line| !line.contains("<img"))
+        .collect();
     io::stdout()
         .write_all(manual.as_bytes())
         .context("writing standard output")?;
