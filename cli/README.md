@@ -15,7 +15,7 @@ This README is the command-line manual. For the Rust library, see the [`velocire
 
 ## Install
 
-From a checkout:
+From cargo:
 
 ```console
 cargo install velociredactor-cli
