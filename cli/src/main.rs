@@ -59,6 +59,16 @@ enum Command {
     #[command(subcommand, name = "privacy_filter")]
     PrivacyFilter(PrivacyFilterCommand),
     /// Choose and check the files AI coding agents must read redacted.
+    ///
+    /// Coding agents send everything they read to their model. A project lists
+    /// its sensitive files in the `agent` section of `velociredactor.yml`, and
+    /// agents read those files with `velociredactor redact FILE` and search
+    /// them with `velociredactor grep`, never directly.
+    ///
+    /// AI agents: run `velociredactor agent skill velociredactor` for complete
+    /// instructions, then `velociredactor agent status` to see whether this project has
+    /// chosen its files. If it has not, ask the user which files to protect
+    /// before running `velociredactor agent init`.
     #[command(subcommand)]
     Agent(AgentCommand),
 }
@@ -76,13 +86,35 @@ enum ConfigCommand {
 #[derive(Debug, Subcommand)]
 enum AgentCommand {
     /// Print the configuration's `agent` section, or that it has none.
+    ///
+    /// When the project has not chosen its protected files yet, also lists
+    /// likely candidates found in it, by file name only, and how to record a
+    /// choice with `velociredactor agent init`.
     Status(AgentStatusArgs),
     /// Print which of the given files agents must read redacted, and exit 1
     /// if any.
     Check(AgentCheckArgs),
-    /// Add an `agent` section to the configuration, creating
-    /// `velociredactor.yml` from the built-in configuration if there is none.
+    /// Record which files agents must read redacted.
+    ///
+    /// Adds an `agent` section to the configuration in use, or creates
+    /// `velociredactor.yml` at the repository root from the built-in
+    /// configuration when there is none. It refuses to replace an existing
+    /// `agent` section; edit that in the file instead.
+    ///
+    /// AI agents: the user decides what is protected. Run
+    /// `velociredactor agent status` to see candidates, ask the user which to
+    /// protect, what to exclude, and whether to enforce, and only then run
+    /// this. `velociredactor agent skill setup` has the full procedure.
+    #[command(after_long_help = INIT_HELP)]
     Init(AgentInitArgs),
+    /// Print the instructions (Agent Skills) for AI agents using
+    /// velociredactor.
+    ///
+    /// With no name, lists the skills; start with `velociredactor`, which
+    /// covers reading, searching and editing protected files. The same skills install as a Claude Code plugin or
+    /// into any agent's skills directory; see
+    /// https://github.com/phayes/velociredactor/tree/master/plugin.
+    Skill(AgentSkillArgs),
     /// Answer a Claude Code PreToolUse hook: read its JSON on standard input
     /// and deny reading a protected file when `enforce` is set.
     Hook(ConfigArg),
@@ -111,21 +143,93 @@ struct AgentCheckArgs {
 
 #[derive(Debug, Args)]
 struct AgentInitArgs {
-    /// A path pattern of files to protect. Repeat for more.
-    #[arg(long, value_name = "GLOB", required = true)]
+    /// A path pattern of files to protect, such as `.env*` or `secrets/`.
+    /// Repeat for more. Quote it so the shell does not expand it.
+    #[arg(long, value_name = "GLOB")]
     protect: Vec<String>,
 
-    /// A path pattern never to protect. Repeat for more.
+    /// A path pattern never to protect, even when a `--protect` pattern
+    /// matches, such as `.env.example`. Repeat for more.
     #[arg(long, value_name = "GLOB")]
     exclude: Vec<String>,
 
-    /// Block agents' direct reads of protected files where they support it.
+    /// Block agents' own read and search tools on protected files, where the
+    /// agent supports hooks (Claude Code with the velociredactor plugin),
+    /// instead of only instructing them.
     #[arg(long)]
     enforce: bool,
 
     #[command(flatten)]
     config: ConfigArg,
 }
+
+#[derive(Debug, Args)]
+struct AgentSkillArgs {
+    /// The skill to print: `velociredactor` (reading, searching and editing
+    /// protected files), `setup` (choosing them), `config` (customizing
+    /// redaction), or `share` (redacting before sharing). Lists the skills
+    /// when omitted.
+    #[arg(value_name = "NAME")]
+    name: Option<String>,
+}
+
+/// Examples and pattern syntax for `agent init --help`.
+const INIT_HELP: &str = "\
+Patterns follow .gitignore conventions, relative to velociredactor.yml:
+  .env*            no `/`: a file name at any depth
+  config/prod.yml  a `/`: anchored at the project root
+  secrets/         a trailing `/`: everything in the directory
+  exports/**/*.csv `*` stays in one path segment, `**` spans segments
+
+Examples:
+  velociredactor agent init --protect '.env*' --exclude .env.example
+  velociredactor agent init --protect '.env*' --protect '*.pem' \\
+      --protect secrets/ --protect '*.log' --enforce
+
+Change the choice later by editing the `agent` section of velociredactor.yml.";
+
+/// An agent skill embedded in the binary.
+struct Skill {
+    name: &'static str,
+    /// What it covers, in a line.
+    summary: &'static str,
+    /// Its `SKILL.md`.
+    text: &'static str,
+    /// Files beside it that it links to, as `(relative path, text)`.
+    references: &'static [(&'static str, &'static str)],
+}
+
+/// The agent skills, from `plugin/skills`. `cli/skills` is a copy, so the
+/// crate carries them when published.
+const SKILLS: &[Skill] = &[
+    Skill {
+        name: "velociredactor",
+        summary: "How to read, search and edit protected files. Start here.",
+        text: include_str!("../skills/velociredactor/SKILL.md"),
+        references: &[],
+    },
+    Skill {
+        name: "velociredactor-setup",
+        summary: "Choosing which files to protect, on first use in a project.",
+        text: include_str!("../skills/velociredactor-setup/SKILL.md"),
+        references: &[],
+    },
+    Skill {
+        name: "velociredactor-config",
+        summary: "Customizing what is redacted in velociredactor.yml.",
+        text: include_str!("../skills/velociredactor-config/SKILL.md"),
+        references: &[(
+            "references/config-reference.md",
+            include_str!("../skills/velociredactor-config/references/config-reference.md"),
+        )],
+    },
+    Skill {
+        name: "velociredactor-share",
+        summary: "Redacting text before it leaves the machine.",
+        text: include_str!("../skills/velociredactor-share/SKILL.md"),
+        references: &[],
+    },
+];
 
 /// Environment variable naming a configuration file that replaces the
 /// built-in one when `--config` is omitted.
@@ -299,6 +403,7 @@ fn main() -> ExitCode {
         Command::Agent(AgentCommand::Status(args)) => agent_status(&args),
         Command::Agent(AgentCommand::Check(args)) => agent_check(&args),
         Command::Agent(AgentCommand::Init(args)) => agent_init(&args),
+        Command::Agent(AgentCommand::Skill(args)) => agent_skill(&args),
         Command::Agent(AgentCommand::Hook(args)) => agent_hook(&args),
     };
     match result {
@@ -518,13 +623,24 @@ fn agent_status(args: &AgentStatusArgs) -> Result<ExitCode> {
     let configured = path.is_some() && config.agent.is_some();
     let agent = config.agent.unwrap_or_default();
 
+    let candidates = if configured {
+        Vec::new()
+    } else {
+        find_candidates(&project_root(path.as_deref())?)
+    };
+
     if args.json {
+        let suggested: Vec<_> = candidates
+            .iter()
+            .map(|c| json!({ "flag": c.flag, "pattern": c.pattern, "what": c.what, "examples": c.examples }))
+            .collect();
         let status = json!({
             "config": path.as_ref().map(|p| p.display().to_string()),
             "configured": configured,
             "protected": agent.protected,
             "exclude": agent.exclude,
             "enforce": agent.enforce,
+            "suggested": suggested,
         });
         println!("{}", serde_json::to_string_pretty(&status)?);
         return Ok(ExitCode::SUCCESS);
@@ -535,7 +651,8 @@ fn agent_status(args: &AgentStatusArgs) -> Result<ExitCode> {
         None => println!("config:    [builtin-default]"),
     }
     if !configured {
-        println!("agent:     not configured; choose files with `velociredactor agent init`");
+        println!("agent:     not configured\n");
+        print!("{}", not_configured_help(&candidates));
         return Ok(ExitCode::SUCCESS);
     }
     println!("protected: {}", agent.protected.join(" "));
@@ -563,6 +680,12 @@ fn agent_check(args: &AgentCheckArgs) -> Result<ExitCode> {
 
 /// Add an `agent` section to the configuration, creating one if needed.
 fn agent_init(args: &AgentInitArgs) -> Result<ExitCode> {
+    if args.protect.is_empty() {
+        let root = project_root(args.config.resolved_path()?.as_deref())?;
+        eprintln!("error: name the files to protect with --protect GLOB\n");
+        eprint!("{}", not_configured_help(&find_candidates(&root)));
+        return Ok(ExitCode::from(2));
+    }
     let path = match args.config.resolved_path()? {
         Some(path) => path,
         None => {
@@ -749,6 +872,206 @@ fn shell_quote(text: &str) -> String {
     } else {
         format!("'{}'", text.replace('\'', r"'\''"))
     }
+}
+
+/// Print an agent skill, or list them.
+fn agent_skill(args: &AgentSkillArgs) -> Result<ExitCode> {
+    let Some(name) = &args.name else {
+        print!("{}", skill_list());
+        return Ok(ExitCode::SUCCESS);
+    };
+    let wanted = name.trim_start_matches("velociredactor-");
+    let Some(skill) = SKILLS.iter().find(|skill| {
+        skill.name == name || skill.name.strip_prefix("velociredactor-") == Some(wanted)
+    }) else {
+        bail!("no skill {name:?}\n\n{}", skill_list());
+    };
+
+    let mut out = io::stdout().lock();
+    out.write_all(skill.text.as_bytes())?;
+    // References are separate files beside the skill; print them after it,
+    // so the relative links in it still lead somewhere.
+    for (path, reference) in skill.references {
+        write!(out, "\n\n---\n\n<!-- {path} -->\n\n{reference}")?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The skills, and how to print them.
+fn skill_list() -> String {
+    let mut list = String::from(
+        "Instructions for AI coding agents using velociredactor, as Agent Skills\n\
+         (https://agentskills.io):\n\n",
+    );
+    for skill in SKILLS {
+        list.push_str(&format!("  {:<24} {}\n", skill.name, skill.summary));
+    }
+    list.push_str(
+        "\nPrint one with `velociredactor agent skill NAME`; the `velociredactor-`\n\
+         prefix is optional. Start with:\n\n\
+         \x20   velociredactor agent skill velociredactor\n\n\
+         To install them for an agent instead, copy them into its skills directory\n\
+         or add the Claude Code plugin: https://github.com/phayes/velociredactor/tree/master/plugin\n",
+    );
+    list
+}
+
+/// A pattern `agent init` might be given, with files in the project it
+/// would cover.
+struct Candidate {
+    /// `--protect` or `--exclude`.
+    flag: &'static str,
+    pattern: &'static str,
+    what: &'static str,
+    examples: Vec<String>,
+}
+
+/// Commonly sensitive files, as `(flag, pattern, what they are)`. Exclusions
+/// follow the patterns they carve exceptions from.
+const CANDIDATES: &[(&str, &str, &str)] = &[
+    ("--protect", ".env*", "environment files"),
+    ("--exclude", ".env.example", "sample environment file"),
+    ("--exclude", ".env.sample", "sample environment file"),
+    ("--exclude", ".env.template", "sample environment file"),
+    ("--protect", "*.pem", "keys and certificates"),
+    ("--protect", "*.key", "private keys"),
+    ("--protect", "*.p12", "key stores"),
+    ("--protect", "*.pfx", "key stores"),
+    ("--protect", "*.jks", "key stores"),
+    ("--protect", "id_rsa*", "SSH keys"),
+    ("--protect", "id_ed25519*", "SSH keys"),
+    ("--protect", "credentials*", "credentials"),
+    ("--protect", "secrets/", "secrets directory"),
+    ("--protect", "*.secrets.*", "secrets files"),
+    ("--protect", ".npmrc", "package registry tokens"),
+    ("--protect", ".pypirc", "package registry tokens"),
+    ("--protect", ".netrc", "login credentials"),
+    ("--protect", "*.kubeconfig", "cluster credentials"),
+    ("--protect", "*.tfstate*", "Terraform state"),
+    ("--protect", "*.tfvars", "Terraform variables"),
+    ("--protect", "*.log", "logs"),
+    ("--protect", "*.har", "HTTP captures"),
+    ("--protect", "*.sql", "database dumps"),
+    ("--protect", "*.dump", "database dumps"),
+    ("--protect", "*.sqlite", "databases"),
+    ("--protect", "*.db", "databases"),
+];
+
+/// Directories never worth looking inside for candidates.
+const SKIPPED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+];
+
+/// The directory the protected files are chosen for: the configuration's,
+/// or the repository root, or the current directory.
+fn project_root(config: Option<&Path>) -> Result<PathBuf> {
+    if let Some(dir) = config.and_then(Path::parent) {
+        let dir = std::path::absolute(dir).context("resolving the configuration directory")?;
+        return Ok(dir);
+    }
+    let cwd = std::env::current_dir().context("determining the current directory")?;
+    Ok(git_root(&cwd).unwrap_or(cwd))
+}
+
+/// The [`CANDIDATES`] with files under `root`, found by name alone: nothing
+/// is read. Ignored and hidden files are included, since that is where
+/// secrets usually are.
+fn find_candidates(root: &Path) -> Vec<Candidate> {
+    use velociredactor::agent::AgentConfig;
+
+    const MAX_FILES: usize = 50_000;
+    const MAX_EXAMPLES: usize = 3;
+
+    let policies: Vec<_> = CANDIDATES
+        .iter()
+        .map(|(_, pattern, _)| {
+            let config = AgentConfig {
+                protected: vec![pattern.to_string()],
+                ..AgentConfig::default()
+            };
+            AgentPolicy::new(&config, root)
+        })
+        .collect();
+    let mut examples = vec![Vec::new(); CANDIDATES.len()];
+
+    let walk = ignore::WalkBuilder::new(root)
+        .standard_filters(false)
+        .max_depth(Some(8))
+        .filter_entry(|entry| {
+            let skipped = entry.depth() > 0
+                && entry.file_type().is_some_and(|t| t.is_dir())
+                && SKIPPED_DIRS.contains(&entry.file_name().to_string_lossy().as_ref());
+            !skipped
+        })
+        .build();
+    let files = walk
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .take(MAX_FILES);
+    for entry in files {
+        let path = entry.path();
+        for (policy, found) in policies.iter().zip(&mut examples) {
+            if found.len() < MAX_EXAMPLES && policy.is_protected(path) {
+                let shown = path.strip_prefix(root).unwrap_or(path);
+                found.push(shown.display().to_string());
+            }
+        }
+    }
+
+    CANDIDATES
+        .iter()
+        .zip(examples)
+        .filter(|(_, examples)| !examples.is_empty())
+        .map(|(&(flag, pattern, what), examples)| Candidate {
+            flag,
+            pattern,
+            what,
+            examples,
+        })
+        .collect()
+}
+
+/// What to do about a project with no `agent` section.
+fn not_configured_help(candidates: &[Candidate]) -> String {
+    let mut help = String::from(
+        "No files are protected yet. The project chooses which files AI agents\n\
+         must read redacted (with `velociredactor redact` and `velociredactor grep`)\n\
+         instead of directly.\n\n",
+    );
+    if candidates.is_empty() {
+        help.push_str(
+            "No commonly sensitive file names were found here. Typical choices\n\
+             are .env*, *.pem, secrets/, *.log and database dumps.\n\n",
+        );
+    } else {
+        help.push_str("Likely candidates here, by file name only (nothing was read):\n");
+        for c in candidates {
+            let flag = format!("{} {}", c.flag, shell_quote(c.pattern));
+            help.push_str(&format!(
+                "  {flag:<28} {}: {}\n",
+                c.what,
+                c.examples.join(", ")
+            ));
+        }
+        help.push('\n');
+    }
+    help.push_str(
+        "AI agents: ask the user which of these to protect, what else to add,\n\
+         what to exclude, and whether to --enforce (block direct reads where the\n\
+         agent supports it). Then record the answer, for example:\n\n\
+         \x20   velociredactor agent init --protect '.env*' --exclude .env.example --enforce\n\n\
+         Pattern syntax: velociredactor agent init --help\n\
+         Full procedure: velociredactor agent skill setup\n",
+    );
+    help
 }
 
 fn download_model(args: DownloadArgs) -> Result<ExitCode> {

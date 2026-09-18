@@ -12,7 +12,7 @@ These skills make AI coding agents read and search sensitive files through `velo
 Every skill needs the `velociredactor` binary on `PATH`:
 
 ```console
-cargo install --git https://github.com/phayes/velociredactor velociredactor-cli
+cargo install velociredactor-cli
 ```
 
 ## Installing

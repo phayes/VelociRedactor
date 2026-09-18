@@ -145,7 +145,7 @@ Install the plugin in Claude Code:
 /plugin install velociredactor@velociredactor
 ```
 
-The skills follow the [Agent Skills](https://agentskills.io) standard, so other agents can load them too. Copy the directories under `plugin/skills/` into the agent's skills directory, such as `.agents/skills/` for Codex. See [plugin/README.md](plugin/README.md) for details.
+The skills follow the [Agent Skills](https://agentskills.io) standard, so other agents can load them too. Copy the directories under `plugin/skills/` into the agent's skills directory, such as `.agents/skills/` for Codex. An agent with no skills installed can list and print them from the binary with `velociredactor agent skill`. See [plugin/README.md](plugin/README.md) for details.
 
 The first time the skills are used in a project, the agent asks which files to protect. It records the answer in an `agent` section of `velociredactor.yml`, which you can also write yourself:
 
@@ -214,6 +214,7 @@ velociredactor privacy_filter download [--dir DIR] [--repo OWNER/NAME]
 velociredactor agent status [--json] [--config FILE]
 velociredactor agent check FILE... [--config FILE]
 velociredactor agent init --protect GLOB... [--exclude GLOB...] [--enforce]
+velociredactor agent skill [NAME]      Print an agent skill, or list them
 velociredactor agent hook              Claude Code PreToolUse hook (JSON on stdin)
 velociredactor man
 ```

@@ -1508,3 +1508,153 @@ fn grep_prints_files_in_path_order() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), want);
 }
+
+#[test]
+fn agent_status_suggests_candidates_by_name() {
+    let dir = agent_repo();
+    fs::write(dir.path().join(".gitignore"), ".env\n").unwrap();
+    fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
+    fs::write(dir.path().join("node_modules/pkg/test.pem"), "").unwrap();
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("not configured"), "{text}");
+    // Ignored files are where secrets live, so they are suggested.
+    assert!(text.contains("--protect '.env*'"), "{text}");
+    assert!(text.contains("--exclude .env.example"), "{text}");
+    assert!(
+        !text.contains("*.pem"),
+        "dependency directories are skipped: {text}"
+    );
+    assert!(text.contains("velociredactor agent init"), "{text}");
+    assert!(text.contains("velociredactor agent skill setup"), "{text}");
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let env = status["suggested"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["pattern"] == ".env*")
+        .expect(".env* is suggested");
+    assert_eq!(env["flag"], "--protect");
+    assert!(env["examples"].as_array().unwrap().contains(&".env".into()));
+
+    // Once configured, there is nothing to suggest.
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env"])
+            .status
+            .success()
+    );
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(status["suggested"], serde_json::json!([]));
+}
+
+#[test]
+fn agent_init_without_patterns_explains_what_to_do() {
+    let dir = agent_repo();
+    let out = agent_init(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let text = stderr(&out);
+    assert!(text.contains("--protect GLOB"), "{text}");
+    assert!(
+        text.contains("--protect '.env*'"),
+        "lists candidates: {text}"
+    );
+    assert!(text.contains("ask the user"), "{text}");
+    assert!(!dir.path().join("velociredactor.yml").exists());
+
+    let out = velociredactor(&["agent", "init", "--help"], "");
+    assert!(out.status.success());
+    assert!(
+        stdout(&out).contains(".gitignore conventions"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn agent_skill_prints_the_skills() {
+    let skill = |args: &[&str]| velociredactor(&[&["agent", "skill"], args].concat(), "");
+    let main = include_str!("../skills/velociredactor/SKILL.md");
+
+    // Without a name, the skills are listed with where to start.
+    let out = skill(&[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let list = stdout(&out);
+    for name in [
+        "velociredactor-setup",
+        "velociredactor-config",
+        "velociredactor-share",
+    ] {
+        assert!(list.contains(name), "{list}");
+    }
+    assert!(list.contains("velociredactor agent skill NAME"), "{list}");
+    assert!(
+        list.contains("velociredactor agent skill velociredactor\n"),
+        "{list}"
+    );
+
+    assert_eq!(stdout(&skill(&["velociredactor"])), main);
+
+    let setup = include_str!("../skills/velociredactor-setup/SKILL.md");
+    assert_eq!(stdout(&skill(&["setup"])), setup);
+    assert_eq!(stdout(&skill(&["velociredactor-setup"])), setup);
+
+    // A skill's references come after it.
+    let config = stdout(&skill(&["config"]));
+    assert!(config.starts_with(include_str!("../skills/velociredactor-config/SKILL.md")));
+    assert!(
+        config.contains("# velociredactor.yml reference"),
+        "{config}"
+    );
+
+    let out = skill(&["nope"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        stderr(&out).contains("velociredactor-share"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// `cli/skills` is a copy of `plugin/skills`, so the published crate can
+/// embed them. The plugin is absent from the published crate itself.
+#[test]
+fn embedded_skills_match_the_plugin() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plugin = root.join("../plugin/skills");
+    if !plugin.exists() {
+        return;
+    }
+    fn files(dir: &Path, base: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files(&path, base, out);
+            } else {
+                let name = path.strip_prefix(base).unwrap().display().to_string();
+                out.push((name, fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let (mut want, mut have) = (Vec::new(), Vec::new());
+    files(&plugin, &plugin, &mut want);
+    files(&root.join("skills"), &root.join("skills"), &mut have);
+    want.sort();
+    have.sort();
+    let names = |v: &[(String, Vec<u8>)]| v.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        names(&have),
+        names(&want),
+        "cp -R plugin/skills/. cli/skills/"
+    );
+    for ((name, a), (_, b)) in have.iter().zip(&want) {
+        assert!(
+            a == b,
+            "cli/skills/{name} differs from plugin/skills; copy it over"
+        );
+    }
+}
