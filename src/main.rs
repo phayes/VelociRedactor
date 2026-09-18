@@ -9,14 +9,13 @@ use serde_json::json;
 use stripsecret::detect::{
     EntropyDetector, Pack, Pii, RegexDetector, RulesetDetector, load_pack_dir,
 };
-use stripsecret::{Allow, DEFAULT_SALT, Finding, FormatHint, Redaction, Redactor};
+use stripsecret::{Allow, Finding, FormatHint, Redaction, Redactor};
 
 /// Redact secrets and personal data from files.
 ///
-/// Each redacted value becomes a token `[REDACTION|<detector>|<len>|<key>]`,
-/// where `key` is the BLAKE3 hash of the salt followed by the value. Keys stay
-/// the same as long as the salt does, so false positives can be let through
-/// with `--allow-key` without writing the value down.
+/// Each redacted value becomes a token `REDACTION-N`, where `N` numbers
+/// distinct secrets in order of first appearance. Equal values share a
+/// number. False positives can be let through with `--allow-value`.
 #[derive(Debug, Parser)]
 #[command(version, about, long_about)]
 struct Cli {
@@ -91,16 +90,6 @@ struct InputArgs {
     /// Entropy threshold for values under a sensitive key (api_key, token, …).
     #[arg(long, value_name = "BITS", default_value_t = EntropyDetector::SENSITIVE_THRESHOLD)]
     sensitive_threshold: f64,
-
-    /// Salt mixed into redaction keys. Use the same salt on every run for
-    /// keys to stay the same.
-    #[arg(long, env = "STRIPSECRET_SALT", default_value = DEFAULT_SALT, hide_env_values = true)]
-    salt: String,
-
-    /// Leave the secret with this key unredacted (repeatable). A full
-    /// `[REDACTION|…]` token is also accepted.
-    #[arg(long, value_name = "KEY")]
-    allow_key: Vec<String>,
 
     /// Leave this exact value unredacted (repeatable).
     #[arg(long, value_name = "VALUE")]
@@ -235,21 +224,11 @@ fn scan<'a>(
         (None, false, None) => FormatHint::Auto,
     };
 
-    for key in &args.allow_key {
-        let key = stripsecret::token_key(key.trim()).unwrap_or(key.trim());
-        if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
-            bail!("--allow-key {key:?} is not a 64-digit hex key");
-        }
-    }
-
     let redaction = redactor.redact(input, hint)?;
-    let allow = Allow::keys(&args.allow_key).with_values(args.allow_value.iter().cloned());
+    let allow = Allow::values(args.allow_value.iter().cloned());
 
     for warning in redaction.warnings() {
         eprintln!("warning: {warning}");
-    }
-    for key in allow.unmatched_keys(redaction.findings()) {
-        eprintln!("warning: --allow-key {key}: no such redaction");
     }
     let unmatched_values = allow.unmatched_value_count(redaction.findings());
     if unmatched_values > 0 {
@@ -260,7 +239,6 @@ fn scan<'a>(
 
 fn build_redactor(args: &InputArgs) -> Result<Redactor> {
     let mut builder = Redactor::builder()
-        .salt(args.salt.as_bytes())
         .entropy_threshold(args.entropy_threshold)
         .sensitive_threshold(args.sensitive_threshold)
         .pii(args.pii.iter().copied());
@@ -319,7 +297,7 @@ fn print_table(
         return Ok(());
     }
 
-    let mut header = vec!["KEY", "DETECTOR", "START", "LEN", "COUNT", "LOCATION"];
+    let mut header = vec!["TOKEN", "DETECTOR", "START", "LEN", "COUNT", "LOCATION"];
     if show_value {
         header.push("VALUE");
     }
@@ -331,7 +309,7 @@ fn print_table(
         .iter()
         .map(|f| {
             let mut row = vec![
-                f.key.clone(),
+                f.token(),
                 f.detector.clone(),
                 f.offset().map_or_else(|| "-".into(), |o| o.to_string()),
                 f.len.to_string(),
@@ -378,7 +356,7 @@ fn print_json(
                 .map(|o| redaction.line_col(o))
                 .map_or((None, None), |(l, c)| (Some(l), Some(c)));
             let mut entry = json!({
-                "key": f.key,
+                "id": f.id,
                 "token": f.token(),
                 "detector": f.detector,
                 "start": f.offset(),

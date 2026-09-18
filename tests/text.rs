@@ -296,18 +296,10 @@ fn bounded_credential_values() {
 
 #[test]
 fn bounded_credential_value_over_redaction_guards() {
-    let already_redacted = format!(
-        "DB_PASSWORD={}",
-        stripsecret::token(
-            "credential-assignment",
-            7,
-            &stripsecret::redaction_key(b"x", "hunter2")
-        )
-    );
     assert_text_cases(&[
         ("DB_PASSWORD=${DB_PASSWORD}", "DB_PASSWORD=${DB_PASSWORD}"),
         ("DB_PASSWORD=REDACTED", "DB_PASSWORD=REDACTED"),
-        (already_redacted.as_str(), "DB_PASSWORD=REDACTION-1"),
+        ("DB_PASSWORD=REDACTION-1", "DB_PASSWORD=REDACTION-1"),
         (
             "the password field should be rotated regularly",
             "the password field should be rotated regularly",

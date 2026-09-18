@@ -2,8 +2,6 @@
 
 use std::sync::LazyLock;
 
-use std::collections::HashMap;
-
 use stripsecret::{Allow, FormatHint, Redaction, Redactor};
 
 /// A value whose Shannon entropy is above the default threshold.
@@ -15,34 +13,14 @@ pub fn redactor() -> &'static Redactor {
     &REDACTOR
 }
 
-/// Replace each `[REDACTION|…]` token with `REDACTION-<n>`, numbering
-/// distinct keys in order of first appearance, so expectations stay readable.
-pub fn normalize(output: &str) -> String {
-    let mut numbers: HashMap<String, usize> = HashMap::new();
-    let mut out = String::with_capacity(output.len());
-    let mut prev = 0;
-    for range in stripsecret::find_tokens(output) {
-        let key = stripsecret::token_key(&output[range.clone()])
-            .unwrap()
-            .to_owned();
-        let next = numbers.len() + 1;
-        let n = *numbers.entry(key).or_insert(next);
-        out.push_str(&output[prev..range.start]);
-        out.push_str(&format!("REDACTION-{n}"));
-        prev = range.end;
-    }
-    out.push_str(&output[prev..]);
-    out
-}
-
-/// Render `redaction` and normalize the tokens.
+/// Render `redaction` as UTF-8.
 pub fn rendered(redaction: &Redaction<'_>, allow: &Allow) -> String {
-    normalize(&String::from_utf8(redaction.render(allow).unwrap()).unwrap())
+    String::from_utf8(redaction.render(allow).unwrap()).unwrap()
 }
 
 /// Redact `input` as plain text.
 pub fn text(input: &str) -> String {
-    normalize(&redactor().redact_str(input))
+    redactor().redact_str(input)
 }
 
 /// Redact `input` as the named format, with nothing allowed.

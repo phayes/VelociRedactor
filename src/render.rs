@@ -7,44 +7,15 @@ use regex::Regex;
 use crate::Finding;
 use crate::detect::Detection;
 
-/// Salt used for redaction keys unless another is configured.
-pub const DEFAULT_SALT: &str = "stripsecret";
-
 /// Every replacement token starts with this.
-pub const TOKEN_PREFIX: &str = "[REDACTION|";
+pub const TOKEN_PREFIX: &str = "REDACTION-";
 
-static TOKEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[REDACTION\|[^|\[\]\s]*\|[0-9]+\|[0-9a-f]{64}\]").unwrap());
+static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bREDACTION-[1-9][0-9]*\b").unwrap());
 
-/// The key that identifies a secret: the BLAKE3 hash of `salt` followed by
-/// the secret, as 64 lowercase hex digits.
-///
-/// Keys are stable for a given salt, so they can be used to allow a known
-/// false positive across runs without revealing its value.
-pub fn redaction_key(salt: &[u8], secret: &str) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(salt);
-    hasher.update(secret.as_bytes());
-    hasher.finalize().to_hex().to_string()
-}
-
-/// The replacement text for a secret: `[REDACTION|<detector>|<len>|<key>]`,
-/// where `len` is the secret's length in bytes.
-///
-/// Characters that would make the token ambiguous (`|`, `[`, `]`, and
-/// whitespace) are replaced with `_` in the detector name.
-pub fn token(detector: &str, len: usize, key: &str) -> String {
-    let detector: String = detector
-        .chars()
-        .map(|c| {
-            if matches!(c, '|' | '[' | ']') || c.is_whitespace() {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    format!("{TOKEN_PREFIX}{detector}|{len}|{key}]")
+/// The replacement text for a secret: `REDACTION-<n>`, where `n` is the
+/// 1-based id of the distinct value in this document.
+pub fn token(id: usize) -> String {
+    format!("{TOKEN_PREFIX}{id}")
 }
 
 /// Whether `s` is exactly a replacement token.
@@ -52,20 +23,14 @@ pub fn is_redaction_token(s: &str) -> bool {
     TOKEN.find(s).is_some_and(|m| m.range() == (0..s.len()))
 }
 
-/// The key inside a replacement token, if `s` is one.
-pub fn token_key(s: &str) -> Option<&str> {
-    is_redaction_token(s).then(|| &s[s.len() - 65..s.len() - 1])
-}
-
 /// Byte ranges of the replacement tokens in `s`.
 pub fn find_tokens(s: &str) -> impl Iterator<Item = Range<usize>> + '_ {
     TOKEN.find_iter(s).map(|m| m.range())
 }
 
-/// Secrets to leave in place, identified by key or by value.
+/// Secrets to leave in place, identified by exact value.
 #[derive(Debug, Clone, Default)]
 pub struct Allow {
-    keys: HashSet<String>,
     values: HashSet<String>,
 }
 
@@ -75,24 +40,9 @@ impl Allow {
         Self::default()
     }
 
-    /// Leave secrets with these keys unredacted. A full replacement token is
-    /// also accepted in place of a key.
-    pub fn keys<S: AsRef<str>>(keys: impl IntoIterator<Item = S>) -> Self {
-        Self::none().with_keys(keys)
-    }
-
     /// Leave these exact secret values unredacted.
     pub fn values<S: Into<String>>(values: impl IntoIterator<Item = S>) -> Self {
         Self::none().with_values(values)
-    }
-
-    pub fn with_keys<S: AsRef<str>>(mut self, keys: impl IntoIterator<Item = S>) -> Self {
-        for key in keys {
-            let key = key.as_ref().trim();
-            let key = token_key(key).unwrap_or(key);
-            self.keys.insert(key.to_ascii_lowercase());
-        }
-        self
     }
 
     pub fn with_values<S: Into<String>>(mut self, values: impl IntoIterator<Item = S>) -> Self {
@@ -102,15 +52,7 @@ impl Allow {
 
     /// Whether `finding` should be left unredacted.
     pub fn allows(&self, finding: &Finding) -> bool {
-        self.keys.contains(&finding.key) || self.values.contains(&finding.secret)
-    }
-
-    /// Keys in this list that match none of `findings`.
-    pub fn unmatched_keys<'a>(&'a self, findings: &'a [Finding]) -> impl Iterator<Item = &'a str> {
-        self.keys
-            .iter()
-            .filter(|k| !findings.iter().any(|f| &f.key == *k))
-            .map(String::as_str)
+        self.values.contains(&finding.secret)
     }
 
     /// Number of values in this list that match none of `findings`.
@@ -183,44 +125,34 @@ mod tests {
         Detection::new(range, label)
     }
 
-    #[test]
-    fn keys_are_salted_blake3_hex() {
-        let key = redaction_key(b"stripsecret", "hunter2");
-        assert_eq!(key.len(), 64);
-        assert_eq!(key, blake3::hash(b"stripsecrethunter2").to_hex().as_str());
-        assert_ne!(key, redaction_key(b"other", "hunter2"));
+    fn finding(secret: &str) -> Finding {
+        Finding {
+            id: 1,
+            secret: secret.into(),
+            detector: "d".into(),
+            len: secret.len(),
+            field: None,
+            offsets: vec![],
+            occurrences: 1,
+        }
     }
 
     #[test]
     fn tokens() {
-        let key = redaction_key(DEFAULT_SALT.as_bytes(), "a@b.com");
-        let t = token("pii:email", 7, &key);
-        assert_eq!(t, format!("[REDACTION|pii:email|7|{key}]"));
+        let t = token(1);
+        assert_eq!(t, "REDACTION-1");
         assert!(is_redaction_token(&t));
-        assert_eq!(token_key(&t), Some(key.as_str()));
-        assert!(!is_redaction_token(&format!("x{t}")));
+        assert_eq!(token(12), "REDACTION-12");
+        assert!(is_redaction_token("REDACTION-12"));
+        assert!(!is_redaction_token("xREDACTION-1"));
+        assert!(!is_redaction_token("REDACTION-01"));
+        assert!(!is_redaction_token("REDACTION-0"));
         assert!(!is_redaction_token("[REDACTION|x|1|abc]"));
-        assert_eq!(
-            token("my rule|v[2]", 3, &key),
-            format!("[REDACTION|my_rule_v_2_|3|{key}]")
-        );
     }
 
     #[test]
-    fn allow_accepts_keys_and_tokens() {
-        let key = redaction_key(b"s", "v");
-        let finding = Finding {
-            key: key.clone(),
-            secret: "v".into(),
-            detector: "d".into(),
-            len: 1,
-            field: None,
-            offsets: vec![],
-            occurrences: 1,
-        };
-        assert!(Allow::keys([&key]).allows(&finding));
-        assert!(Allow::keys([key.to_uppercase()]).allows(&finding));
-        assert!(Allow::keys([token("d", 1, &key)]).allows(&finding));
+    fn allow_accepts_values() {
+        let finding = finding("v");
         assert!(Allow::values(["v"]).allows(&finding));
         assert!(!Allow::values(["w"]).allows(&finding));
         assert!(!Allow::none().allows(&finding));
@@ -250,12 +182,12 @@ mod tests {
 
     #[test]
     fn snaps_to_char_boundaries_and_drops_ranges_inside_tokens() {
-        let t = token("entropy", 5, &redaction_key(b"", "x"));
+        let t = token(1);
         let value = format!("é {t}");
-        let hex = value.len() - 65..value.len() - 1;
+        let token_range = 3..value.len();
         let merged = merge(
             &value,
-            vec![d(1..2, "x"), d(hex, "y"), d(3..value.len(), "z")],
+            vec![d(1..2, "x"), d(token_range, "y"), d(3..value.len(), "z")],
         );
         assert_eq!(merged, vec![d(0..2, "x")]);
     }

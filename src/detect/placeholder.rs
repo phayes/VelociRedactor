@@ -36,7 +36,7 @@ static BRACKETED_INTERIOR: LazyLock<Regex> =
 /// Whether a credential-shaped value is obviously not a real secret.
 ///
 /// Recognizes empty values, earlier redactions (including this crate's
-/// `[REDACTION|…]` tokens), common documentation placeholders such as
+/// `REDACTION-N` tokens), common documentation placeholders such as
 /// `changeme` or `<password>`, `${VAR}` expansions, and masks such as `****`.
 pub fn is_placeholder(value: &str) -> bool {
     let trimmed = value.trim().trim_matches(['"', '\'']);
@@ -98,7 +98,8 @@ mod tests {
             "REDACTED",
             "[REDACTED]",
             "<redacted>",
-            "[REDACTION|entropy|3|af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262]",
+            "REDACTION-1",
+            "REDACTION-12",
             "changeme",
             "'changeme'",
             "\"example\"",
@@ -129,7 +130,8 @@ mod tests {
             "**",
             "x",
             "xxy",
-            "REDACTION-1",
+            "REDACTION-0",
+            "xREDACTION-1",
             "[REDACTION|entropy|3|abc]",
             "s3cr3t-value",
         ] {

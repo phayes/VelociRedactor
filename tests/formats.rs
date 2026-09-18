@@ -386,8 +386,8 @@ fn binary_plist() {
     assert_eq!(dict["count"].as_signed_integer(), Some(3));
 
     // Nothing to redact: the original bytes are returned.
-    let key = &redaction.findings()[0].key;
-    assert_eq!(redaction.render(&Allow::keys([key])).unwrap(), input);
+    let secret = &redaction.findings()[0].secret;
+    assert_eq!(redaction.render(&Allow::values([secret])).unwrap(), input);
 }
 
 #[test]
@@ -429,8 +429,8 @@ fn traversal_order_is_stable() {
         .unwrap();
     assert_eq!(redaction.findings().len(), 2);
     let all = rendered(&redaction, &Allow::none());
-    let second = &redaction.findings()[1].key;
-    let keep_two = rendered(&redaction, &Allow::keys([second]));
+    let second = &redaction.findings()[1].secret;
+    let keep_two = rendered(&redaction, &Allow::values([second]));
     assert_eq!(
         all,
         "a: \"REDACTION-1\"\nb: \"REDACTION-2\"\nc: \"REDACTION-1\"\n"

@@ -1,4 +1,4 @@
-//! Redaction tokens, keys, allow lists, custom rules, and extension points.
+//! Redaction tokens, allow lists, custom rules, and extension points.
 
 mod common;
 
@@ -8,7 +8,7 @@ use common::*;
 use stripsecret::detect::{Detection, Detector, LeafContext, Pack, RegexDetector, load_pack_dir};
 use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 use stripsecret::policy::ScanAll;
-use stripsecret::{Allow, DEFAULT_SALT, FormatHint, Redactor, RedactorBuilder, redaction_key};
+use stripsecret::{Allow, FormatHint, Redactor, RedactorBuilder};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
@@ -26,13 +26,13 @@ fn token_format() {
         .redact(b"export DB_PASSWORD=hunter2", FormatHint::Name("text"))
         .unwrap();
     let finding = &redaction.findings()[0];
-    let key = blake3::hash(b"stripsecrethunter2").to_hex().to_string();
-    assert_eq!(finding.key, key);
+    assert_eq!(finding.id, 1);
+    assert_eq!(finding.token(), "REDACTION-1");
     assert_eq!(finding.len, 7);
     assert_eq!(finding.detector, "credential-assignment");
     assert_eq!(
         String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
-        format!("export DB_PASSWORD=[REDACTION|credential-assignment|7|{key}]")
+        "export DB_PASSWORD=REDACTION-1"
     );
 }
 
@@ -45,11 +45,11 @@ fn len_counts_bytes() {
         .redact("a café".as_bytes(), FormatHint::Name("text"))
         .unwrap();
     assert_eq!(redaction.findings()[0].len, 5);
-    assert!(redactor.redact_str("a café").contains("|word|5|"));
+    assert_eq!(redactor.redact_str("a café"), "a REDACTION-1");
 }
 
 #[test]
-fn equal_values_share_a_key() {
+fn equal_values_share_an_id() {
     let input = format!("a DB_PASSWORD=hunter2 b {S} c DB_PASSWORD=hunter2 d {S}");
     let redaction = redactor()
         .redact(input.as_bytes(), FormatHint::Name("text"))
@@ -58,11 +58,8 @@ fn equal_values_share_a_key() {
     assert_eq!(findings.len(), 2);
     assert_eq!(findings[0].secret, "hunter2");
     assert_eq!(findings[1].secret, S);
-    assert_eq!(
-        findings[0].key,
-        redaction_key(DEFAULT_SALT.as_bytes(), "hunter2")
-    );
-    assert_eq!(findings[1].key, redaction_key(DEFAULT_SALT.as_bytes(), S));
+    assert_eq!(findings[0].id, 1);
+    assert_eq!(findings[1].id, 2);
     assert_eq!(findings[0].occurrences, 2);
     assert_eq!(findings[0].offsets, [14, 84]);
     assert_eq!(
@@ -72,7 +69,7 @@ fn equal_values_share_a_key() {
 }
 
 #[test]
-fn allow_by_key_and_by_value() {
+fn allow_by_value() {
     let input = format!(
         "one DB_PASSWORD=hunter2\ntwo {S}\nthree postgres://app:pwd123@db.example.com/app\n"
     );
@@ -84,52 +81,17 @@ fn allow_by_key_and_by_value() {
         "one DB_PASSWORD=REDACTION-1\ntwo REDACTION-2\nthree REDACTION-3\n"
     );
 
-    let second = redaction.findings()[1].key.clone();
     assert_eq!(
-        rendered(&redaction, &Allow::keys([&second])),
-        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-2\n")
-    );
-    assert_eq!(
-        rendered(&redaction, &Allow::keys([redaction.findings()[1].token()])),
-        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-2\n")
+        rendered(&redaction, &Allow::values([S])),
+        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-3\n")
     );
     assert_eq!(
         rendered(&redaction, &Allow::values(["hunter2"])),
-        format!("one DB_PASSWORD=hunter2\ntwo REDACTION-1\nthree REDACTION-2\n")
+        format!("one DB_PASSWORD=hunter2\ntwo REDACTION-2\nthree REDACTION-3\n")
     );
 
-    let all = Allow::values(["hunter2"])
-        .with_keys(redaction.findings()[1..].iter().map(|f| f.key.clone()));
+    let all = Allow::values(redaction.findings().iter().map(|f| f.secret.clone()));
     assert_eq!(rendered(&redaction, &all), input);
-}
-
-#[test]
-fn keys_depend_only_on_salt_and_value() {
-    let input = format!("{{\"a\":\"{S}\",\"b\":\"DB_PASSWORD=hunter2\",\"c\":\"{S}\"}}\n");
-    let keys = |redactor: &Redactor| {
-        redactor
-            .redact(input.as_bytes(), FormatHint::Auto)
-            .unwrap()
-            .findings()
-            .iter()
-            .map(|f| f.key.clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(keys(redactor()), keys(redactor()));
-
-    let salted = Redactor::builder().salt("team-salt").build();
-    let salted_keys = keys(&salted);
-    assert_eq!(
-        salted_keys,
-        keys(&Redactor::builder().salt("team-salt").build())
-    );
-    assert_ne!(salted_keys, keys(redactor()));
-    assert_eq!(salted_keys[1], redaction_key(b"team-salt", "hunter2"));
-
-    // A key only matches under the salt it was made with.
-    let default_key = keys(redactor())[1].clone();
-    let redaction = salted.redact(input.as_bytes(), FormatHint::Auto).unwrap();
-    assert!(rendered(&redaction, &Allow::keys([default_key])).contains("DB_PASSWORD=REDACTION-2"));
 }
 
 #[test]
@@ -167,7 +129,7 @@ fn inline_custom_rules() {
         .detector(RegexDetector::new("acme", r"ACME_[A-Z0-9]{8}").unwrap())
         .build();
     assert_eq!(
-        normalize(&redactor.redact_str("token ACME_AB12CD34 here")),
+        redactor.redact_str("token ACME_AB12CD34 here"),
         "token REDACTION-1 here"
     );
     // Without the rule the low-entropy token is left alone.
@@ -219,7 +181,7 @@ fn builder_threads_entropy_thresholds() {
 
     let lowered = Redactor::builder().sensitive_threshold(3.0).build();
     assert_eq!(
-        normalize(&render(&lowered, input, "json", &Allow::none())),
+        render(&lowered, input, "json", &Allow::none()),
         r#"{"api_key":"REDACTION-1"}"#
     );
 }
@@ -231,7 +193,7 @@ fn scan_all_policy_scans_skipped_keys() {
     assert_eq!(default, input);
     let scan_all = Redactor::builder().policy(ScanAll).build();
     assert_eq!(
-        normalize(&render(&scan_all, &input, "json", &Allow::none())),
+        render(&scan_all, &input, "json", &Allow::none()),
         r#"{"session_id":"REDACTION-1"}"#
     );
 }

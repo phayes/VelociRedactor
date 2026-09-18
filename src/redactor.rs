@@ -11,7 +11,7 @@ use crate::format::{
     Container, Edit, Format, FormatRegistry, Leaf, LeafVisitor, Replacement, apply_edits,
 };
 use crate::policy::{DefaultPolicy, LeafPolicy};
-use crate::render::{self, Allow, DEFAULT_SALT};
+use crate::render::{self, Allow};
 
 /// Configures a [`Redactor`].
 ///
@@ -25,7 +25,6 @@ pub struct RedactorBuilder {
     pii: Vec<Pii>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
-    salt: Vec<u8>,
 }
 
 impl Default for RedactorBuilder {
@@ -43,7 +42,6 @@ impl RedactorBuilder {
             pii: Vec::new(),
             formats: FormatRegistry::text_only(),
             policy: Arc::new(DefaultPolicy),
-            salt: DEFAULT_SALT.as_bytes().to_vec(),
         }
     }
 
@@ -132,17 +130,6 @@ impl RedactorBuilder {
         self
     }
 
-    /// Set the salt mixed into redaction keys (default
-    /// [`DEFAULT_SALT`](crate::DEFAULT_SALT)).
-    ///
-    /// Keys only stay the same across runs if the salt does, so use a fixed
-    /// salt when allow lists are stored by key. A secret salt keeps keys from
-    /// being used to confirm guesses of short secrets.
-    pub fn salt(mut self, salt: impl Into<Vec<u8>>) -> Self {
-        self.salt = salt.into();
-        self
-    }
-
     pub fn build(self) -> Redactor {
         let mut detectors = self.detectors;
         if let Some(entropy) = self.entropy {
@@ -156,7 +143,6 @@ impl RedactorBuilder {
             detectors: detectors.into(),
             formats: self.formats,
             policy: self.policy,
-            salt: self.salt.into(),
         }
     }
 }
@@ -182,7 +168,6 @@ pub struct Redactor {
     detectors: Arc<[Box<dyn Detector>]>,
     formats: FormatRegistry,
     policy: Arc<dyn LeafPolicy>,
-    salt: Arc<[u8]>,
 }
 
 impl Default for Redactor {
@@ -270,7 +255,7 @@ impl Redactor {
             findings: Vec::new(),
             warnings,
         };
-        redaction.identify(&self.salt, &collector.leaves, detected);
+        redaction.identify(&collector.leaves, detected);
         Ok(redaction)
     }
 
@@ -311,9 +296,9 @@ pub struct Redaction<'a> {
 /// One redacted secret. Every occurrence of the same text shares a finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    /// Salted BLAKE3 hash of the secret, as 64 lowercase hex digits. See
-    /// [`redaction_key`](crate::redaction_key).
-    pub key: String,
+    /// 1-based id of this distinct value in the document. Same text shares
+    /// an id. The replacement token is `REDACTION-<id>`.
+    pub id: usize,
     /// The redacted text.
     pub secret: String,
     /// What detected the first occurrence.
@@ -333,7 +318,7 @@ pub struct Finding {
 impl Finding {
     /// The replacement token for this secret.
     pub fn token(&self) -> String {
-        render::token(&self.detector, self.len, &self.key)
+        render::token(self.id)
     }
 
     /// Byte offset of the first occurrence, when known.
@@ -384,7 +369,7 @@ impl Redaction<'_> {
         Ok(self.format.rewrite(self.input, &mut visitor)?)
     }
 
-    fn identify(&mut self, salt: &[u8], leaves: &[CollectedLeaf], detected: Vec<Vec<Detection>>) {
+    fn identify(&mut self, leaves: &[CollectedLeaf], detected: Vec<Vec<Detection>>) {
         let mut by_secret: HashMap<String, usize> = HashMap::new();
         for (leaf, detections) in leaves.iter().zip(detected) {
             if detections.is_empty() {
@@ -395,7 +380,7 @@ impl Redaction<'_> {
                 let text = &leaf.value[detection.range.clone()];
                 let index = *by_secret.entry(text.to_owned()).or_insert_with(|| {
                     self.findings.push(Finding {
-                        key: render::redaction_key(salt, text),
+                        id: self.findings.len() + 1,
                         secret: text.to_owned(),
                         detector: detection.label,
                         len: text.len(),

@@ -124,13 +124,13 @@ fn categories_are_opt_in() {
 
     let email_only = pii_redactor(&[Pii::Email]);
     assert_eq!(
-        normalize(&email_only.redact_str(input)),
+        email_only.redact_str(input),
         "contact REDACTION-1 and call 555-123-4567"
     );
 
     let all = pii_redactor(&Pii::ALL);
     assert_eq!(
-        normalize(&all.redact_str("lives at 123 Main Street, call 555-123-4567")),
+        all.redact_str("lives at 123 Main Street, call 555-123-4567"),
         "lives at REDACTION-1, call REDACTION-2"
     );
 }
@@ -158,8 +158,7 @@ fn custom_pii_patterns() {
 #[test]
 fn secrets_and_pii_coexist() {
     let redactor = pii_redactor(&[Pii::Email]);
-    let got =
-        normalize(&redactor.redact_str(&format!("key={HIGH_ENTROPY_SECRET} user@example.com")));
+    let got = redactor.redact_str(&format!("key={HIGH_ENTROPY_SECRET} user@example.com"));
     assert_eq!(got, "REDACTION-1 REDACTION-2");
 }
 

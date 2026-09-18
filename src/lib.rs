@@ -1,11 +1,9 @@
 //! Redact secrets and personal data from text and structured files.
 //!
-//! Each redacted value is replaced with a token of the form
-//! `[REDACTION|<detector>|<len>|<key>]`, where `len` is the secret's length in
-//! bytes and `key` is the BLAKE3 hash of a salt followed by the secret (see
-//! [`redaction_key`]). Keys are stable for a given salt, so a false positive
-//! can be let through by key ([`Allow::keys`]) without writing the value down,
-//! or by value ([`Allow::values`]).
+//! Each redacted value is replaced with a token `REDACTION-N`, where `N`
+//! numbers distinct secrets in order of first appearance. Equal values share
+//! a number. A false positive can be let through by value
+//! ([`Allow::values`]).
 //!
 //! Structured formats (JSON, JSONL, YAML, TOML, XML, HCL, INI, dotenv, Java
 //! properties, CSV, binary plists) are parsed so that only values are
@@ -13,23 +11,22 @@
 //! skips that parsing and treats the whole input as plain text.
 //!
 //! ```
-//! use stripsecret::{Allow, FormatHint, Redactor, redaction_key};
+//! use stripsecret::{Allow, FormatHint, Redactor};
 //!
-//! let redactor = Redactor::builder().salt("my-team").build();
+//! let redactor = Redactor::builder().build();
 //! let input = br#"{"db_password": "hunter2", "note": "hello"}"#;
 //!
 //! let redaction = redactor.redact(input, FormatHint::Name("json")).unwrap();
-//! let key = redaction_key(b"my-team", "hunter2");
-//! assert_eq!(redaction.findings()[0].key, key);
+//! assert_eq!(redaction.findings()[0].id, 1);
+//! assert_eq!(redaction.findings()[0].token(), "REDACTION-1");
 //!
 //! let output = redaction.render(&Allow::none()).unwrap();
-//! let expected = format!(
-//!     r#"{{"db_password": "[REDACTION|credential-key|7|{key}]", "note": "hello"}}"#
+//! assert_eq!(
+//!     output,
+//!     br#"{"db_password": "REDACTION-1", "note": "hello"}"#
 //! );
-//! assert_eq!(output, expected.as_bytes());
 //!
 //! // Let that secret through.
-//! assert_eq!(redaction.render(&Allow::keys([&key])).unwrap(), input);
 //! assert_eq!(redaction.render(&Allow::values(["hunter2"])).unwrap(), input);
 //! ```
 //!
@@ -48,7 +45,4 @@ mod render;
 
 pub use error::{Error, FormatError};
 pub use redactor::{Finding, FormatHint, Redaction, Redactor, RedactorBuilder};
-pub use render::{
-    Allow, DEFAULT_SALT, TOKEN_PREFIX, find_tokens, is_redaction_token, redaction_key, token,
-    token_key,
-};
+pub use render::{Allow, TOKEN_PREFIX, find_tokens, is_redaction_token, token};
