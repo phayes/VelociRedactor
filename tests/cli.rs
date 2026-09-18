@@ -291,7 +291,7 @@ fn entropy_thresholds_are_configuration() {
 }
 
 #[test]
-fn custom_rules_and_packs() {
+fn custom_regex_rules() {
     let dir = tempfile::tempdir().unwrap();
     let config = detector_config(dir.path(), "  - regex:\n      patterns: ['ACME_[0-9]{4}']");
     let out = redact(&["--config", &config], "id ACME_1234\n");
@@ -301,26 +301,21 @@ fn custom_rules_and_packs() {
     let doc: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
     assert_eq!(doc["redactions"][0]["detector"], "regex");
 
-    let packs = tempfile::tempdir().unwrap();
-    fs::write(
-        packs.path().join("team.yaml"),
-        "name: team\nversion: '1'\nrules:\n  - id: t\n    regex: 'TEAM-[0-9]{3}'\n",
-    )
-    .unwrap();
-    let with_pack = write_config(
+    // A second entry keeps its own label, which is how unrelated groups of
+    // patterns stay apart in a listing.
+    let labelled = write_config(
         dir.path(),
-        &[extra_detector(&format!(
-            "  - rule-packs:\n      paths:\n        - {}",
-            packs.path().to_str().unwrap()
-        ))],
+        &[extra_detector(
+            "  - regex:\n      label: team\n      patterns: ['TEAM-[0-9]{3}']",
+        )],
         "",
     );
-    let out = redact(&["--config", &with_pack], "ref TEAM-123\n");
+    let out = redact(&["--config", &labelled], "ref TEAM-123\n");
     assert_eq!(stdout(&out), "ref REDACTION-1\n");
 
-    let listed = list(&["--json", "--config", &with_pack], "ref TEAM-123\n");
+    let listed = list(&["--json", "--config", &labelled], "ref TEAM-123\n");
     let doc: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
-    assert_eq!(doc["redactions"][0]["detector"], "team.t");
+    assert_eq!(doc["redactions"][0]["detector"], "team");
 
     let broken = detector_config(dir.path(), "  - regex:\n      patterns: ['unclosed(']");
     let out = redact(&["--config", &broken], "");
@@ -626,15 +621,13 @@ fn config_resolves_rule_paths_relative_to_itself() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("rules")).unwrap();
     fs::write(
-        dir.path().join("rules/team.yaml"),
-        "name: team\nversion: '1'\nrules:\n  - id: t\n    regex: 'TEAM-[0-9]{3}'\n",
+        dir.path().join("rules/team.toml"),
+        "[[rules]]\nid = \"t\"\nregex = '''TEAM-[0-9]{3}'''\n",
     )
     .unwrap();
     let config = write_config(
         dir.path(),
-        &[extra_detector(
-            "  - rule-packs:\n      paths:\n        - rules",
-        )],
+        &[("        - builtin:betterleaks", "        - rules/team.toml")],
         "",
     );
 

@@ -17,7 +17,6 @@ use serde::Deserialize;
 mod connstr;
 mod credential;
 mod entropy;
-mod pack;
 mod path;
 mod pii;
 mod placeholder;
@@ -30,10 +29,6 @@ pub use connstr::ConnectionStringDetector;
 pub(crate) use credential::normalize_key as credential_key_normalize;
 pub use credential::{CredentialAssignmentDetector, CredentialKeyDetector};
 pub use entropy::{EntropyConfig, EntropyDetector, shannon_entropy};
-pub use pack::{
-    LoadedPacks, MAX_PACK_FILE_BYTES, MAX_PACK_FILES, Pack, PackRule, PackSample, RulePacksConfig,
-    load_pack_dir,
-};
 pub use path::{PathConfig, PathDetector};
 pub use pii::{AddressDetector, EmailConfig, EmailDetector, PhoneDetector};
 pub use placeholder::{PlaceholderConfig, Placeholders, is_placeholder};
@@ -120,8 +115,6 @@ pub enum DetectorConfig {
     CredentialAssignment,
     /// [`CredentialKeyDetector`]
     CredentialKey,
-    /// A [`RegexDetector`] per rule of each loaded [`Pack`].
-    RulePacks(RulePacksConfig),
     /// [`EmailDetector`]
     PiiEmail(EmailConfig),
     /// [`PhoneDetector`]
@@ -151,7 +144,6 @@ pub const DETECTOR_NAMES: &[&str] = &[
     "connection-string",
     "credential-assignment",
     "credential-key",
-    "rule-packs",
     "pii:email",
     "pii:phone",
     "pii:address",
@@ -172,15 +164,7 @@ impl<'de> Deserialize<'de> for DetectorConfig {
 struct DetectorVisitor;
 
 /// The detectors that take settings, and so cannot be written as a bare name.
-const CONFIGURED: [&str; 7] = [
-    "entropy",
-    "ruleset",
-    "regex",
-    "value",
-    "path",
-    "rule-packs",
-    "pii:email",
-];
+const CONFIGURED: [&str; 6] = ["entropy", "ruleset", "regex", "value", "path", "pii:email"];
 
 fn unknown_detector<E: serde::de::Error>(name: &str) -> E {
     E::custom(format!(
@@ -223,7 +207,6 @@ impl<'de> serde::de::Visitor<'de> for DetectorVisitor {
             "regex" => DetectorConfig::Regex(map.next_value()?),
             "value" => DetectorConfig::Value(map.next_value()?),
             "path" => DetectorConfig::Path(map.next_value()?),
-            "rule-packs" => DetectorConfig::RulePacks(map.next_value()?),
             "pii:email" => DetectorConfig::PiiEmail(map.next_value()?),
             // A detector that takes no settings, written `- name:` with
             // nothing under it.
@@ -257,7 +240,6 @@ impl DetectorConfig {
             Self::ConnectionString => "connection-string",
             Self::CredentialAssignment => "credential-assignment",
             Self::CredentialKey => "credential-key",
-            Self::RulePacks(_) => "rule-packs",
             Self::PiiEmail(_) => "pii:email",
             Self::PiiPhone => "pii:phone",
             Self::PiiAddress => "pii:address",
@@ -267,12 +249,11 @@ impl DetectorConfig {
     /// Build this entry's detectors.
     ///
     /// `placeholders` is the configuration's shared vocabulary of values that
-    /// look like credentials but are not. Loading a rule pack can raise
-    /// warnings without failing, which are appended to `warnings`.
+    /// look like credentials but are not. Entries that do not consult it
+    /// ignore the argument.
     pub fn detectors(
         &self,
         placeholders: &Placeholders,
-        warnings: &mut Vec<String>,
     ) -> Result<Vec<Box<dyn Detector>>, crate::Error> {
         Ok(match self {
             Self::Entropy(config) => vec![Box::new(EntropyDetector::new(config)?)],
@@ -292,13 +273,12 @@ impl DetectorConfig {
                 let detector = PathDetector::new(&config.paths);
                 boxed_unless(detector.is_empty(), detector)
             }
-            Self::CredentialedUri => vec![Box::new(CredentialedUriDetector)],
+            Self::CredentialedUri => vec![Box::new(CredentialedUriDetector::new(placeholders))],
             Self::ConnectionString => vec![Box::new(ConnectionStringDetector::new(placeholders))],
             Self::CredentialAssignment => {
                 vec![Box::new(CredentialAssignmentDetector::new(placeholders))]
             }
             Self::CredentialKey => vec![Box::new(CredentialKeyDetector::new(placeholders))],
-            Self::RulePacks(config) => config.detectors(warnings)?,
             Self::PiiEmail(config) => vec![Box::new(EmailDetector::new(config))],
             Self::PiiPhone => vec![Box::new(PhoneDetector)],
             Self::PiiAddress => vec![Box::new(AddressDetector)],
@@ -307,24 +287,14 @@ impl DetectorConfig {
 
     /// Resolve the file paths this entry names against `base`.
     pub fn resolve_paths(&mut self, base: &Path) {
-        match self {
-            Self::Ruleset(config) => {
-                for source in &mut config.rules {
-                    if let RuleSource::Path(path) = source
-                        && path.is_relative()
-                    {
-                        *path = base.join(&*path);
-                    }
+        if let Self::Ruleset(config) = self {
+            for source in &mut config.rules {
+                if let RuleSource::Path(path) = source
+                    && path.is_relative()
+                {
+                    *path = base.join(&*path);
                 }
             }
-            Self::RulePacks(config) => {
-                for path in &mut config.paths {
-                    if path.is_relative() {
-                        *path = base.join(&*path);
-                    }
-                }
-            }
-            _ => {}
         }
     }
 }

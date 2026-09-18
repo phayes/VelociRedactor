@@ -24,9 +24,9 @@
 //! omitting one would otherwise mean an empty list, which weakens redaction
 //! without saying so.
 //!
-//! Relative paths inside `detectors` — a `ruleset` file, a `rule-packs`
-//! directory — are resolved against the directory of the file they were read
-//! from, so a configuration can be moved around with the rules it names.
+//! Relative paths inside `detectors` — a `ruleset` file — are resolved
+//! against the directory of the file they were read from, so a configuration
+//! can be moved around with the rules it names.
 
 use std::fs;
 use std::path::Path;
@@ -143,9 +143,8 @@ impl Config {
 
     /// Add everything this configuration describes to `builder`.
     ///
-    /// Problems that do not prevent redacting — a format this build lacks, a
-    /// rule pack whose sample disagrees with its rule — are appended to
-    /// `warnings` instead of returned.
+    /// Problems that do not prevent redacting — a format this build lacks —
+    /// are appended to `warnings` instead of returned.
     pub fn apply(
         &self,
         builder: RedactorBuilder,
@@ -171,7 +170,7 @@ impl Config {
         }
 
         for detector in &self.detectors {
-            for detector in detector.detectors(&placeholders, warnings)? {
+            for detector in detector.detectors(&placeholders)? {
                 builder = builder.boxed_detector(detector);
             }
         }

@@ -201,6 +201,33 @@ fn credentialed_uris() {
     ]);
 }
 
+/// A URL is only a credential when its password is one. These are the same
+/// documentation placeholders the other credential detectors already skip.
+#[test]
+fn credentialed_uris_with_a_placeholder_password() {
+    assert_text_cases(&[
+        (
+            "DATABASE_URL=postgres://app:${PGPASSWORD}@db.example.com:5432/app",
+            "DATABASE_URL=postgres://app:${PGPASSWORD}@db.example.com:5432/app",
+        ),
+        (
+            "cache redis://:<password>@localhost:6379/0",
+            "cache redis://:<password>@localhost:6379/0",
+        ),
+        (
+            "proxy=https://user:changeme@example.com/path",
+            "proxy=https://user:changeme@example.com/path",
+        ),
+        (
+            "mysql://root:****@localhost:3306/app",
+            "mysql://root:****@localhost:3306/app",
+        ),
+        // The host is not what makes it a placeholder: a real password beside
+        // an example host is still a secret.
+        ("postgres://app:pwd123@example.com/app", "REDACTION-1"),
+    ]);
+}
+
 #[test]
 fn database_connection_strings() {
     assert_text_cases(&[

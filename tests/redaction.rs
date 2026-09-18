@@ -2,13 +2,11 @@
 
 mod common;
 
-use std::fs;
-
 use common::*;
 use stripsecret::config::Config;
 use stripsecret::detect::{
-    AddressDetector, Detection, Detector, DetectorConfig, EmailDetector, LeafContext, Pack,
-    PhoneDetector, RegexDetector, load_pack_dir,
+    AddressDetector, Detection, Detector, DetectorConfig, EmailDetector, LeafContext,
+    PhoneDetector, RegexDetector,
 };
 use stripsecret::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 use stripsecret::policy::ScanAll;
@@ -140,37 +138,6 @@ fn inline_custom_rules() {
     );
     // Without the rule the low-entropy token is left alone.
     assert_eq!(text("token ACME_AB12CD34 here"), "token ACME_AB12CD34 here");
-}
-
-#[test]
-fn rule_packs_end_to_end() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::write(
-        dir.path().join("acme.yaml"),
-        "name: acme\nversion: 1.0.0\nrules:\n  - id: token\n    regex: 'ACME_[A-Z0-9]{8}'\n    samples:\n      - { input: 'ACME_AB12CD34', redacted: true }\n",
-    )
-    .unwrap();
-    let loaded = load_pack_dir(dir.path()).unwrap();
-    assert_eq!(loaded.packs.len(), 1);
-    let (detectors, warnings) = loaded.packs[0].detectors();
-    assert!(warnings.is_empty());
-
-    let mut builder = Redactor::builder();
-    for d in detectors {
-        builder = builder.detector(d);
-    }
-    let redaction = builder
-        .build()
-        .redact(b"token ACME_AB12CD34", FormatHint::Name("text"))
-        .unwrap();
-    assert_eq!(redaction.findings()[0].detector, "acme.token");
-
-    let pack = Pack::parse(
-        "name: p\nversion: '1'\nrules:\n  - id: r\n    regex: 'X+'\n",
-        "p.yaml".as_ref(),
-    )
-    .unwrap();
-    assert_eq!(pack.detectors().0.len(), 1);
 }
 
 #[test]

@@ -47,9 +47,9 @@ struct Compiled {
 
 /// A compiled placeholder vocabulary. Cloning is cheap.
 ///
-/// Every detector that reports a value because of the key or syntax around it
-/// — rather than because of the value itself — checks it against one of
-/// these first.
+/// Every detector that finds a credential by its surroundings or by a
+/// vendor's pattern — and so can be looking at a documentation sample of one
+/// — checks the value against one of these first.
 #[derive(Debug, Clone)]
 pub struct Placeholders {
     inner: Arc<Compiled>,

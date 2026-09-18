@@ -15,10 +15,6 @@ pub enum Error {
     #[error("ruleset: {0}")]
     Ruleset(String),
 
-    /// A rule pack could not be loaded.
-    #[error("rule pack: {0}")]
-    Pack(String),
-
     /// A configuration file could not be read or understood.
     #[error("config: {0}")]
     Config(String),

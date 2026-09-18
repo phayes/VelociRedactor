@@ -69,9 +69,14 @@ policy:
 # placeholder — values that look like credentials but are not.
 #
 # Documentation samples, masks, and earlier redactions, which would otherwise
-# be reported as secrets over and over. Shared by every detector that reports
-# a value because of the key or syntax around it rather than the value itself:
-# ruleset, connection-string, credential-assignment, credential-key.
+# be reported as secrets over and over. Consulted by every detector that finds
+# a credential by its surroundings or by a vendor's pattern, and so can be
+# looking at a sample of one: ruleset, credentialed-uri, connection-string,
+# credential-assignment, credential-key.
+#
+# The others do not consult it, and are not meant to: `entropy` judges the
+# value itself, where a placeholder scores too low to report anyway, and
+# `regex`, `value` and `path` were told exactly what to redact.
 # ---------------------------------------------------------------------------
 placeholder:
   # Compared in lowercase after trimming whitespace and one layer of quotes,
@@ -195,7 +200,8 @@ detectors:
         # matched.
         - 'sbp_[a-z0-9_-]{20,}'
 
-  # URLs with a password in the userinfo (postgres://user:pass@host/db).
+  # URLs with a password in the userinfo (postgres://user:pass@host/db). The
+  # whole URL is redacted, unless the password is a `placeholder` value.
   - credentialed-uri
 
   # JDBC URLs, libpq DSNs, and ADO.NET connection strings.
@@ -225,13 +231,6 @@ detectors:
   #
   # - pii:address
 
-  ## Extra rule packs: a pack file, or a directory of them, relative to this
-  ## config file. See the crate docs for the pack format. Findings are
-  ## labelled `<pack name>.<rule id>`.
-  # - rule-packs:
-  #     paths:
-  #       - ./packs
-  
   ## Exact strings, redacted wherever they appear, even mid-sentence. For
   ## secrets you already know the text of.
   # - value:
@@ -257,14 +256,10 @@ detectors:
 
 
 # ---------------------------------------------------------------------------
-# allow — what survives, whatever found it.
+# allow — don't ever redact these values.
 #
 # Allowing is the last word: a value listed here stays in the document even
 # when a detector above reported it.
-#
-# There is no `disallow` to match it. Always redacting something is detection,
-# not an exception to it, so it is written as a `value`, `regex`, or `path`
-# detector above.
 # ---------------------------------------------------------------------------
 allow:
   # Exact values to leave in place, for confirmed false positives.
