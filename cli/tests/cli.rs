@@ -11,6 +11,12 @@ const BUILTIN: &str = include_str!("../../default_config.yml");
 /// The command-line manual built into the binary.
 const CLI_README: &str = include_str!("../../README.md");
 
+/// The README logo markup omitted from terminal output.
+const CLI_README_LOGO: &str = concat!(
+    r#"<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="velociredactor logo" width="420"></p>"#,
+    "\n\n"
+);
+
 /// Environment variable the binary reads for a configuration file.
 const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
 
@@ -450,7 +456,9 @@ fn list_formats() {
 fn man_prints_the_cli_readme() {
     let out = velociredactor(&["man"], "");
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), CLI_README);
+    let manual = stdout(&out);
+    assert_eq!(manual, CLI_README.replacen(CLI_README_LOGO, "", 1));
+    assert!(!manual.contains("<img"));
     assert!(out.stderr.is_empty());
 
     let help = velociredactor(&["--help"], "");

@@ -1,6 +1,6 @@
-# velociredactor
+<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="velociredactor logo" width="300"></p>
 
-<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="velociredactor logo" width="420"></p>
+# velociredactor
 
 `velociredactor` redacts secrets and personal data from text and structured files while preserving their shape and formatting. Each distinct secret is replaced by a stable numbered token such as `REDACTION-1`.
 
