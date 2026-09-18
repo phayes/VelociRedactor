@@ -1658,3 +1658,266 @@ fn embedded_skills_match_the_plugin() {
         );
     }
 }
+
+/// A git repository holding a secret in an ignored hidden file, in a
+/// structured file, and in a dependency, beside clean and binary files.
+fn scan_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::write(root.join(".gitignore"), ".env\n").unwrap();
+    fs::write(root.join(".env"), format!("ANTHROPIC_API_KEY={S}\n")).unwrap();
+    fs::create_dir(root.join("config")).unwrap();
+    fs::write(
+        root.join("config/settings.yml"),
+        format!("db:\n  host: prod.internal\n  api_key: \"{S}\"\n"),
+    )
+    .unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("src/blob.bin"), format!("\0\0{S}\n")).unwrap();
+    fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+    fs::write(root.join("node_modules/pkg/.env"), format!("KEY={S}\n")).unwrap();
+    dir
+}
+
+fn scan_in(dir: &Path, args: &[&str]) -> Output {
+    velociredactor_in(dir, dir, &[&["scan"], args].concat(), "")
+}
+
+#[test]
+fn scan_lists_files_with_secrets_without_their_values() {
+    let dir = scan_repo();
+    let out = scan_in(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains(S), "{text}");
+    let files: Vec<&str> = text
+        .lines()
+        .skip(1)
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+    // Hidden and ignored files are scanned; binary files and dependencies
+    // are not.
+    assert_eq!(files, [".env", "config/settings.yml"], "{text}");
+    assert!(stderr(&out).contains("scanned 4 files"), "{}", stderr(&out));
+
+    let out = scan_in(dir.path(), &["-l"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(stdout(&out), ".env\nconfig/settings.yml\n");
+}
+
+#[test]
+fn scan_prints_json() {
+    let dir = scan_repo();
+    let out = scan_in(dir.path(), &["--json", "config"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(!stdout(&out).contains(S));
+    let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let files = report["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{report}");
+    let file = &files[0];
+    assert_eq!(file["path"], "config/settings.yml");
+    assert_eq!(file["count"], 1);
+    assert_eq!(file["protected"], false);
+    assert_eq!(file["findings"][0]["line"], 3);
+    assert!(!file["detectors"].as_array().unwrap().is_empty());
+    assert_eq!(report["scanned"], 1);
+}
+
+#[test]
+fn scan_flags_choose_what_is_walked() {
+    let dir = scan_repo();
+    let listed = |args: &[&str]| stdout(&scan_in(dir.path(), &[&["-l"], args].concat()));
+
+    assert_eq!(listed(&["--skip-hidden"]), "config/settings.yml\n");
+    assert_eq!(listed(&["--skip-ignored"]), "config/settings.yml\n");
+    assert_eq!(listed(&["-g", "*.yml"]), "config/settings.yml\n");
+    assert_eq!(
+        listed(&["--all-dirs"]),
+        ".env\nconfig/settings.yml\nnode_modules/pkg/.env\n"
+    );
+    assert_eq!(listed(&["--max-filesize", "10"]), "");
+}
+
+#[test]
+fn scan_exits_0_when_nothing_holds_a_secret() {
+    let dir = scan_repo();
+    let out = scan_in(dir.path(), &["src"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(stderr(&out).contains("0 with secrets"), "{}", stderr(&out));
+}
+
+#[test]
+fn scan_honors_the_allow_list() {
+    let dir = scan_repo();
+    rules_config(dir.path(), &format!("allow:\n  values: [\"{S}\"]\n"));
+    let out = scan_in(dir.path(), &["-l"]);
+    assert!(out.status.success(), "{}", stdout(&out));
+    assert_eq!(stdout(&out), "");
+}
+
+#[test]
+fn scan_marks_and_can_leave_out_protected_files() {
+    let dir = scan_repo();
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env*"])
+            .status
+            .success()
+    );
+    let out = scan_in(dir.path(), &[]);
+    let text = stdout(&out);
+    let env = text.lines().find(|l| l.starts_with(".env")).unwrap();
+    assert!(env.ends_with("protected"), "{text}");
+    let config = text.lines().find(|l| l.starts_with("config/")).unwrap();
+    assert!(!config.ends_with("protected"), "{text}");
+
+    let out = scan_in(dir.path(), &["--unprotected", "-l"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(stdout(&out), "config/settings.yml\n");
+}
+
+#[test]
+fn scan_fails_on_a_broken_configuration() {
+    let dir = scan_repo();
+    fs::write(dir.path().join("velociredactor.yml"), "detectors: [\n").unwrap();
+    let out = scan_in(dir.path(), &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        stderr(&out).contains("velociredactor.yml"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn agent_status_lists_files_whose_contents_hold_secrets() {
+    let dir = scan_repo();
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.contains(S), "{text}");
+    assert!(text.contains("contents hold likely secrets"), "{text}");
+    assert!(text.contains("config/settings.yml"), "{text}");
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let paths: Vec<_> = status["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, [".env", "config/settings.yml"]);
+
+    // Once configured, only unprotected files are listed.
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env"])
+            .status
+            .success()
+    );
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(status["scanned"], true);
+    assert_eq!(status["secrets"][0]["path"], "config/settings.yml");
+    assert_eq!(status["secrets"].as_array().unwrap().len(), 1, "{status}");
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    let text = stdout(&out);
+    assert!(text.contains("Unprotected files"), "{text}");
+    assert!(text.contains("config/settings.yml"), "{text}");
+}
+
+#[test]
+fn agent_status_no_scan_reads_no_contents() {
+    let dir = scan_repo();
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "status", "--json", "--no-scan"],
+        "",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(status["scanned"], false);
+    assert_eq!(status["secrets"], serde_json::json!([]));
+    // Name candidates are still suggested.
+    assert!(!status["suggested"].as_array().unwrap().is_empty());
+
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "status", "--no-scan"],
+        "",
+    );
+    assert!(!stdout(&out).contains("contents hold"), "{}", stdout(&out));
+}
+
+/// Protected files are skipped before they are opened, so an unreadable one
+/// causes no error.
+#[cfg(unix)]
+#[test]
+fn protected_files_are_not_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = scan_repo();
+    assert!(
+        agent_init(dir.path(), &["--protect", ".env"])
+            .status
+            .success()
+    );
+    let env = dir.path().join(".env");
+    fs::set_permissions(&env, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&env).is_ok() {
+        // Running as root, which reads anything.
+        return;
+    }
+
+    let out = scan_in(dir.path(), &["--unprotected", "-l"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(stdout(&out), "config/settings.yml\n");
+    assert_eq!(stderr(&out), "");
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stderr(&out).contains(".env"), "{}", stderr(&out));
+
+    // Without --unprotected, the file is read, and fails.
+    let out = scan_in(dir.path(), &["-l"]);
+    assert!(stderr(&out).contains(".env"), "{}", stderr(&out));
+}
+
+#[test]
+fn agent_status_leaves_out_the_privacy_filter_model() {
+    let dir = scan_repo();
+    // A model that isn't there fails whenever the detector is built.
+    let config = detector_config(
+        dir.path(),
+        "  - privacy_filter:\n      model_dir: /nonexistent/velociredactor-model\n",
+    );
+    let mut source = fs::read_to_string(&config).unwrap();
+    source.push_str("\nagent:\n  protected: [\".env\"]\n");
+    fs::write(&config, source).unwrap();
+
+    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(status["secrets"][0]["path"], "config/settings.yml");
+
+    let out = velociredactor_in(
+        dir.path(),
+        dir.path(),
+        &["agent", "status", "--privacy-filter"],
+        "",
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("velociredactor.yml"),
+        "{}",
+        stderr(&out)
+    );
+
+    // An explicit scan runs every detector the configuration enables.
+    assert_eq!(scan_in(dir.path(), &[]).status.code(), Some(2));
+}

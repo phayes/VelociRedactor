@@ -40,6 +40,14 @@ velociredactor redact --check --raw < draft.md > /dev/null && echo clean
 
 Exit 1 means something would be redacted. In that case, send the redacted output instead, or ask the user.
 
+To check files before attaching or uploading them, such as a directory of logs for a bug report:
+
+```sh
+velociredactor scan path/to/logs/ other-file.txt   # exit 1 = some hold secrets; lists which
+```
+
+Send the redacted version of each file it lists.
+
 ## Things to watch for
 
 - Redaction covers secrets and, when turned on, personal data. It doesn't remove internal hostnames, project names, or proprietary code. If content may be confidential beyond secrets, ask the user before sharing it at all.

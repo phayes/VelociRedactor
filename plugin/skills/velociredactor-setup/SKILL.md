@@ -21,7 +21,19 @@ velociredactor agent status
 
 ## 2. Find candidate files
 
-`velociredactor agent status` already lists likely candidates, found by file name, with example paths. Add `--json` for machine-readable output. Treat that list as a starting point. Also look at both tracked and ignored files yourself. Ignored files are often where the secrets are. **Look only at file names, not contents.**
+`velociredactor agent status` already lists two kinds of candidates. Add `--json` for machine-readable output (`suggested` and `secrets`).
+
+- **By file name:** patterns such as `.env*` or `*.pem`, with example paths.
+- **By contents:** files that `velociredactor scan` found secrets in, with how many values each holds and which detectors found them. It never shows the values. It includes hidden and ignored files, which are often where the secrets are.
+
+`agent status` shows the first 20 files with secrets. It leaves out the slow `privacy_filter` detector, even when the project enables it; `--privacy-filter` puts it back. If the user doesn't want file contents read at all, use `agent status --no-scan`, which suggests file names only. For every file with secrets, with the line of each finding and every detector the project enables:
+
+```sh
+velociredactor scan              # table: file, findings, detectors
+velociredactor scan --json       # machine-readable
+```
+
+Treat both lists as a starting point. Also look at the names of tracked and ignored files yourself, for data that detectors don't recognize, such as customer exports. **Don't read file contents to judge them.** `scan` and `velociredactor list FILE` tell you what's inside without showing it.
 
 ```sh
 git ls-files --cached --others --exclude-standard
@@ -41,7 +53,7 @@ Group the matches into categories like these, and skip any category that has no 
 | Data exports | `*.csv`, `*.jsonl`, `*.parquet` under `data/`, `exports/`, `fixtures/` and similar |
 | Production config | `config/*prod*`, `*.secrets.yml`, `appsettings.*.json` |
 
-Optionally, confirm a candidate really contains secrets without seeing them. The output shows detector names and positions, and no values:
+A file that `scan` lists but that no category covers, such as `config/settings.yml`, can be protected by its own path. So can a directory, if several of its files hold secrets: `config/`. Some hits are false positives, such as test fixtures with sample keys or docs with example passwords. Present them anyway and let the user decide. To see where in a file the findings are, still without values:
 
 ```sh
 velociredactor list path/to/candidate
@@ -49,7 +61,7 @@ velociredactor list path/to/candidate
 
 ## 3. Ask the user
 
-Present the categories that have matches, with a few example paths each, and ask which to protect. Use your structured question tool if you have one (a multi-select works well); otherwise ask in plain text. Also ask:
+Present the categories that have matches, with a few example paths each, and the files `scan` found secrets in, and ask which to protect. Use your structured question tool if you have one (a multi-select works well); otherwise ask in plain text. Also ask:
 
 1. **Anything else?** Paths only they know about, such as customer data or internal docs.
 2. **Exceptions?** Files matching a pattern that are safe, such as `.env.example`.
@@ -82,6 +94,8 @@ velociredactor agent status
 velociredactor agent check <one file per category>   # each should print and exit 1
 velociredactor config validate
 ```
+
+`agent status` now lists the unprotected files whose contents hold secrets, without opening the protected ones. If it lists any, the user chose not to protect them, or a pattern missed them. Mention them once.
 
 Then tell the user:
 

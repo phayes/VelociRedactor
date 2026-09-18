@@ -52,7 +52,7 @@ Only Claude Code gets the enforcing hook. In other agents the skills work by ins
 
 The first time the skills are used in a project, the agent runs `velociredactor agent status`. If the project hasn't chosen its protected files yet, the agent:
 
-1. finds likely candidates by file name only, without reading contents;
+1. finds likely candidates by file name, and files whose contents hold secrets (`velociredactor scan`, which never shows the values; `agent status --no-scan` skips reading contents);
 2. asks you which to protect, what to exclude, and whether to enforce;
 3. writes your answer with `velociredactor agent init`.
 

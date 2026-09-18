@@ -7,13 +7,12 @@
 //! it finds. Output therefore never holds a secret, and a search for a
 //! secret's own text finds nothing.
 
-use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::io::{self, BufWriter, Read, Write};
+use std::mem;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::{fs, mem, thread};
 
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Args};
@@ -22,15 +21,14 @@ use grep::printer::{
 };
 use grep::regex::{RegexMatcher, RegexMatcherBuilder};
 use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
-use ignore::WalkBuilder;
-use ignore::overrides::OverrideBuilder;
 use ignore::types::TypesBuilder;
-use rayon::iter::{ParallelBridge, ParallelIterator};
 use termcolor::NoColor;
-use velociredactor::config::Config;
-use velociredactor::{Allow, FormatHint, Redactor};
+use velociredactor::FormatHint;
 
-use crate::{CONFIG_ENV, ConfigArg, Discoveries, build_redactor};
+use crate::util::{
+    CONFIG_ENV, ConfigArg, Fatal, RulesCache, WalkOptions, display_path, for_each_ordered,
+    is_broken_pipe, is_file, walk_builder,
+};
 
 /// Flags follow ripgrep's. Output is never colored and never grouped under
 /// headings.
@@ -257,12 +255,6 @@ impl Sink for Probe {
     }
 }
 
-/// A redactor and allow list, loaded once per configuration file.
-type Rules = (Redactor, Allow);
-
-/// A configuration's rules, or why they could not be loaded.
-type LoadedRules = Arc<OnceLock<Result<Rules, String>>>;
-
 /// Something the walk produced, to search or report.
 enum Source {
     Stdin,
@@ -285,59 +277,15 @@ struct Outcome {
     fatal: bool,
 }
 
-/// A configuration that could not be loaded. It stops the whole search,
-/// where other errors stop only the file they occur in.
-#[derive(Debug)]
-struct Fatal(String);
-
-impl std::fmt::Display for Fatal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Fatal {}
-
 /// What every thread of a search shares.
 struct Shared<'a> {
     args: &'a GrepArgs,
     matcher: RegexMatcher,
-    config: ConfigArg,
-    discoveries: Mutex<Discoveries>,
-    /// Rules by configuration file (`None` for the built-in one), each
-    /// loaded when a file that uses it first matches.
-    rules: Mutex<HashMap<Option<PathBuf>, LoadedRules>>,
+    rules: RulesCache,
     show_path: bool,
     /// Whether paths defaulted to the current directory, whose `./` is left
     /// off the paths shown.
     implicit_root: bool,
-    stop: AtomicBool,
-}
-
-impl Shared<'_> {
-    /// The configuration file for a file in `directory`, or for standard
-    /// input when `None`.
-    fn config_path(&self, directory: Option<&Path>) -> Result<Option<PathBuf>> {
-        match directory {
-            None => self.config.resolved_path(),
-            Some(directory) => {
-                let mut discoveries = self.discoveries.lock().unwrap_or_else(|e| e.into_inner());
-                Ok(self
-                    .config
-                    .resolved_path_cached(directory, &mut discoveries))
-            }
-        }
-    }
-
-    /// The rules of the configuration at `path`, loading them on first use.
-    fn rules(&self, path: Option<PathBuf>) -> LoadedRules {
-        let mut rules = self.rules.lock().unwrap_or_else(|e| e.into_inner());
-        let loaded = rules.entry(path.clone()).or_default().clone();
-        drop(rules);
-        // Other threads wanting the same rules wait here while they load.
-        loaded.get_or_init(|| load_rules(path.as_deref()).map_err(|err| format!("{err:#}")));
-        loaded
-    }
 }
 
 /// The searchers and printer of one thread.
@@ -380,15 +328,10 @@ impl<'a> Worker<'a> {
                     })
             }
             Source::Entry(Err(err)) => Err(err.into()),
-            Source::Entry(Ok(entry)) => {
-                let is_file = entry.file_type().is_some_and(|t| t.is_file())
-                    || (entry.depth() == 0 && entry.path().is_file());
-                if is_file {
-                    self.search_file(entry.path(), &mut outcome)
-                } else {
-                    Ok(())
-                }
+            Source::Entry(Ok(entry)) if is_file(&entry) => {
+                self.search_file(entry.path(), &mut outcome)
             }
+            Source::Entry(Ok(_)) => Ok(()),
         };
         if let Err(err) = result {
             outcome.messages.push(format!("error: {err:#}"));
@@ -400,10 +343,7 @@ impl<'a> Worker<'a> {
     }
 
     fn search_file(&mut self, path: &Path, outcome: &mut Outcome) -> Result<()> {
-        let display = match path.strip_prefix("./") {
-            Ok(stripped) if self.shared.implicit_root => stripped,
-            _ => path,
-        };
+        let display = display_path(path, self.shared.implicit_root);
         let data = fs::read(path).with_context(|| format!("reading {}", display.display()))?;
         self.search_data(path, display, &data, outcome)
     }
@@ -432,27 +372,13 @@ impl<'a> Worker<'a> {
         }
 
         let stdin = path == Path::new("-");
-        let directory = if stdin {
-            None
+        let (rules, hint) = if stdin {
+            (self.shared.rules.for_directory(None)?, FormatHint::Auto)
         } else {
-            let absolute = std::path::absolute(path)
-                .with_context(|| format!("resolving {}", display.display()))?;
-            Some(absolute.parent().unwrap_or(Path::new("/")).to_owned())
+            (self.shared.rules.for_file(path)?, FormatHint::Path(path))
         };
-        let loaded = self
-            .shared
-            .rules(self.shared.config_path(directory.as_deref())?);
-        let (redactor, allow) = match loaded.get().expect("rules load before they are returned") {
-            Ok(rules) => rules,
-            Err(err) => return Err(Fatal(err.clone()).into()),
-        };
-
-        let hint = if stdin {
-            FormatHint::Auto
-        } else {
-            FormatHint::Path(path)
-        };
-        let redaction = redactor
+        let redaction = rules
+            .redactor
             .redact(data, hint)
             .with_context(|| format!("redacting {}", display.display()))?;
         for warning in redaction.warnings() {
@@ -461,7 +387,7 @@ impl<'a> Worker<'a> {
                 .push(format!("warning: {}: {warning}", display.display()));
         }
         let redacted = redaction
-            .render(allow)
+            .render(&rules.allow)
             .with_context(|| format!("redacting {}", display.display()))?;
         outcome.hit = self
             .printer
@@ -482,15 +408,12 @@ fn run(args: &GrepArgs) -> Result<ExitCode> {
     let shared = Shared {
         args,
         matcher: matcher(args, &patterns)?,
-        config: ConfigArg {
+        rules: RulesCache::new(ConfigArg {
             config: args.config.clone(),
-        },
-        discoveries: Mutex::new(Discoveries::new()),
-        rules: Mutex::new(HashMap::new()),
+        }),
         show_path: !args.no_filename
             && (args.with_filename || paths.len() > 1 || paths.iter().any(|p| p.is_dir())),
         implicit_root,
-        stop: AtomicBool::new(false),
     };
 
     // Build every walker first, so a bad `--glob` or `--type` fails before
@@ -510,80 +433,56 @@ fn run(args: &GrepArgs) -> Result<ExitCode> {
 
     let mut failed = false;
     let mut found = false;
+    let mut printed = false;
     let mut stdout = BufWriter::new(io::stdout().lock());
-    let (sender, receiver) = mpsc::channel::<(usize, Outcome)>();
-    thread::scope(|scope| -> Result<()> {
-        let shared = &shared;
-        scope.spawn(move || {
-            // The walk feeds the threads as it goes, in order, and ends
-            // early once the search stops.
-            sources
-                .into_iter()
-                .flatten()
-                .take_while(|_| !shared.stop.load(Ordering::Relaxed))
-                .enumerate()
-                .par_bridge()
-                .for_each_init(
-                    || (sender.clone(), Worker::new(shared)),
-                    |(sender, worker), (index, source)| {
-                        if shared.stop.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        let outcome = worker.search(source);
-                        if outcome.fatal {
-                            shared.stop.store(true, Ordering::Relaxed);
-                        }
-                        let _ = sender.send((index, outcome));
-                    },
-                );
-        });
-
-        // Report outcomes in walk order, holding back any that arrive early.
-        let mut early = BTreeMap::new();
-        let mut printed = false;
-        let mut next = 0;
-        for (index, outcome) in &receiver {
-            early.insert(index, outcome);
-            while let Some(mut outcome) = early.remove(&next) {
-                next += 1;
-                if !outcome.messages.is_empty() {
-                    stdout.flush().context("writing standard output")?;
-                    for message in &outcome.messages {
-                        eprintln!("{message}");
-                    }
-                }
-                failed |= outcome.failed;
-                found |= outcome.hit;
-                if outcome.fatal || (args.quiet && found) {
-                    shared.stop.store(true, Ordering::Relaxed);
-                    return Ok(());
-                }
-                if outcome.output.is_empty() {
-                    continue;
-                }
-                // One printer would separate context groups across files;
-                // each file has its own, so separate them here.
-                if separate_files && printed {
-                    outcome.output.splice(0..0, *b"--\n");
-                }
-                printed = true;
-                if let Err(err) = stdout.write_all(&outcome.output) {
-                    shared.stop.store(true, Ordering::Relaxed);
-                    return Err(err).context("writing standard output");
+    let stop = AtomicBool::new(false);
+    let unreported = for_each_ordered(
+        sources.into_iter().flatten(),
+        &stop,
+        || Worker::new(&shared),
+        |worker, source| {
+            let outcome = worker.search(source);
+            if outcome.fatal {
+                stop.store(true, Ordering::Relaxed);
+            }
+            outcome
+        },
+        |mut outcome| {
+            if !outcome.messages.is_empty() {
+                stdout.flush().context("writing standard output")?;
+                for message in &outcome.messages {
+                    eprintln!("{message}");
                 }
             }
-        }
-        // A configuration failed, and the search stopped before the files
-        // ahead of it were reported.
-        if let Some(outcome) = early.values().find(|outcome| outcome.fatal) {
-            stdout.flush().context("writing standard output")?;
-            for message in &outcome.messages {
-                eprintln!("{message}");
+            failed |= outcome.failed;
+            found |= outcome.hit;
+            if outcome.fatal || (args.quiet && found) {
+                return Ok(false);
             }
-            failed = true;
+            if outcome.output.is_empty() {
+                return Ok(true);
+            }
+            // One printer would separate context groups across files; each
+            // file has its own, so separate them here.
+            if separate_files && printed {
+                outcome.output.splice(0..0, *b"--\n");
+            }
+            printed = true;
+            stdout
+                .write_all(&outcome.output)
+                .context("writing standard output")?;
+            Ok(true)
+        },
+    )?;
+    // A configuration failed, and the search stopped before the files ahead
+    // of it were reported.
+    if let Some(outcome) = unreported.iter().find(|outcome| outcome.fatal) {
+        stdout.flush().context("writing standard output")?;
+        for message in &outcome.messages {
+            eprintln!("{message}");
         }
-        Ok(())
-    })?;
+        failed = true;
+    }
 
     stdout.flush().context("writing standard output")?;
     Ok(if args.quiet && found {
@@ -686,14 +585,17 @@ fn printer(args: &GrepArgs, show_path: bool) -> Printer {
 
 /// Walk `root` in path order, honoring ignore files, globs and types.
 fn walker(args: &GrepArgs, root: &Path) -> Result<ignore::Walk> {
-    let mut builder = WalkBuilder::new(root);
-    let cwd = std::env::current_dir().context("determining the current directory")?;
-    let mut overrides = OverrideBuilder::new(&cwd);
-    for glob in &args.glob {
-        overrides
-            .add(glob)
-            .with_context(|| format!("parsing the glob {glob:?}"))?;
-    }
+    let mut builder = walk_builder(
+        root,
+        &WalkOptions {
+            globs: &args.glob,
+            hidden: args.hidden,
+            ignored: args.no_ignore,
+            follow: args.follow,
+            max_depth: args.max_depth,
+            skipped_dirs: &[],
+        },
+    )?;
     let mut types = TypesBuilder::new();
     types.add_defaults();
     for name in &args.file_type {
@@ -702,43 +604,6 @@ fn walker(args: &GrepArgs, root: &Path) -> Result<ignore::Walk> {
     for name in &args.type_not {
         types.negate(name);
     }
-    builder
-        .hidden(!args.hidden)
-        .ignore(!args.no_ignore)
-        .git_ignore(!args.no_ignore)
-        .git_global(!args.no_ignore)
-        .git_exclude(!args.no_ignore)
-        .parents(!args.no_ignore)
-        .follow_links(args.follow)
-        .max_depth(args.max_depth)
-        .overrides(overrides.build().context("parsing --glob")?)
-        .types(types.build().context("parsing --type")?)
-        .sort_by_file_name(|a, b| a.cmp(b))
-        // Git's own files are never worth searching, even with `--hidden`.
-        .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git");
+    builder.types(types.build().context("parsing --type")?);
     Ok(builder.build())
-}
-
-/// The redactor and allow list of the configuration at `path`, or of the
-/// built-in configuration.
-fn load_rules(path: Option<&Path>) -> Result<Rules> {
-    let load = || -> Result<Rules> {
-        let config = match path {
-            Some(path) => Config::from_path(path)?,
-            None => Config::builtin().clone(),
-        };
-        Ok((build_redactor(&config)?, config.allow()?))
-    };
-    match path {
-        Some(path) => load().with_context(|| format!("loading {}", path.display())),
-        None => load(),
-    }
-}
-
-fn is_broken_pipe(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<io::Error>()
-            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
-    })
 }

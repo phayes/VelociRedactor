@@ -72,7 +72,10 @@ velociredactor config validate                  # exit 0 = usable; warnings/erro
 velociredactor list path/to/sample              # which detector fired, where; values hidden
 velociredactor list path/to/sample --json       # same, machine-readable
 velociredactor redact --check path/to/sample    # exit 1 if anything is still redacted
+velociredactor scan                             # every file with findings, before and after a change
 ```
+
+After a change that should cut false positives or catch new secrets, compare `velociredactor scan` over the project from before and after the change. That shows which files it affected.
 
 To check a single value without writing it to disk, pipe it in: `printf 'KEY=value\n' | velociredactor list`. Don't use `--show-value` to check your work. The `DETECTOR` column and the positions are enough to confirm a fix. Only the user may decide to look at values.
 

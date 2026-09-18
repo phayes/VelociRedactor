@@ -17,12 +17,24 @@ Run this once per session, before the first sensitive read:
 velociredactor agent status
 ```
 
-- If it says **`not configured`**, the user hasn't chosen which files to protect. The output lists likely candidates. Follow the `velociredactor-setup` skill first, then come back here. If that skill isn't installed, `velociredactor agent skill setup` prints it.
+- If it says **`not configured`**, the user hasn't chosen which files to protect. The output lists likely candidates, by file name and by contents. Follow the `velociredactor-setup` skill first, then come back here. If that skill isn't installed, `velociredactor agent skill setup` prints it.
 - If the command is **not found**, tell the user velociredactor is missing and how to install it:
   ```sh
   cargo install velociredactor-cli
   ```
   Do **not** fall back to reading sensitive files raw. Ask the user how to proceed.
+
+Once the project is configured, `agent status` also lists **unprotected files whose contents hold likely secrets**. It finds them by redacting files in memory and prints paths and detector names, never values. It doesn't open protected files. It includes hidden and `.gitignore`d files, and skips Git's files, dependency and build directories, and binary files.
+
+Treat every file on that list as protected for the rest of the session: read it with `velociredactor redact`, and search it with `velociredactor grep`. Tell the user which files it found, and offer to add them to the `agent:` section so the choice sticks. The `velociredactor-setup` skill covers changing the section.
+
+The status list stops at 20 files, and it leaves out the slow `privacy_filter` detector even when the project enables it. For the full list, with every detector the project enables:
+
+```sh
+velociredactor scan --unprotected -l   # one path per line; exit 1 = some found
+```
+
+If the user doesn't want file contents read at all, `velociredactor agent status --no-scan` skips the scan.
 
 ## Before reading a file
 
@@ -30,10 +42,13 @@ velociredactor agent status
 velociredactor agent check path/to/file   # exit 1 = protected, 0 = not
 ```
 
-Read the file through velociredactor when **either** is true:
+Read the file through velociredactor when **any** of these is true:
 
 - `agent check` exits 1. The project says so.
-- The file looks sensitive even though it isn't listed. Examples: a `.env`, a key, a dump, a log with request bodies, or a customer export.
+- `agent status` or `velociredactor scan --unprotected` listed it at the start of the session, or `velociredactor scan path/to/file` exits 1 now. Its contents hold secrets.
+- The file looks sensitive even though neither command flagged it. Examples: a `.env`, a key, a dump, a log with request bodies, or a customer export.
+
+A new file, one generated since the session began, or one outside the project hasn't been scanned. `velociredactor scan FILE...` checks it before you read it.
 
 To read it redacted:
 

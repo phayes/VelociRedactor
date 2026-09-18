@@ -86,6 +86,26 @@ Each file is searched as it is on disk first. A file with a match is redacted an
 
 Directories are searched recursively, skipping hidden files and files that `.gitignore` excludes. Each file is redacted with the configuration found from its own directory unless `--config` is given. The exit status is 0 when something matched, 1 when nothing did, and 2 on an error.
 
+## Find files with secrets
+
+`scan` lists the files that hold secrets, with how many values each would have redacted and which detectors found them. It never prints the values:
+
+```console
+$ velociredactor scan
+FILE                 FINDINGS  DETECTORS
+.env                 1         entropy                   protected
+config/settings.yml  2         entropy,credentialed_uri
+scanned 5 files: 2 with secrets, 0 skipped as binary or over --max-filesize
+```
+
+```console
+velociredactor scan -l config/          # paths only
+velociredactor scan --json              # with the line of each finding
+velociredactor scan --unprotected       # only files the agent section leaves readable
+```
+
+Each file is redacted in memory with the configuration found from its own directory, and allow lists apply. Unlike `grep`, hidden and `.gitignore`d files are scanned by default, since that is where secrets usually live; `--skip-hidden` and `--skip-ignored` leave them out. Git's own files and dependency and build directories (`node_modules`, `target`, `vendor`, `.venv`, `venv`, `__pycache__`, `dist`, `build`) are skipped unless `--all-dirs` is given, and so are binary files and files over `--max-filesize` (10M by default). Files that an `agent` section protects are marked `protected`. The exit status is 1 when any file holds secrets, 0 when none does, and 2 on an error with nothing found.
+
 ## Configuration
 
 Configuration defines what counts as sensitive. Print the complete built-in configuration to make an editable copy:
@@ -155,7 +175,7 @@ velociredactor agent status
 velociredactor agent check .env
 ```
 
-Patterns follow `.gitignore` conventions, relative to the configuration file. `agent check` exits 1 when any file it is given is protected.
+Patterns follow `.gitignore` conventions, relative to the configuration file. `agent check` exits 1 when any file it is given is protected. `agent status` also lists the files whose contents hold secrets that no `agent` section protects, as `scan --unprotected` finds them. Protected files are not read. Until the project has chosen, it suggests file name patterns as well. It leaves out the slow `privacy_filter` detector unless given `--privacy-filter`, and `--no-scan` makes it read no contents at all, suggesting by file name only.
 
 With `enforce`, the plugin's hook blocks the agent's own Read and Grep tools on protected files, and on searches of directories holding them. The agent is pointed at `velociredactor redact` or `velociredactor grep` instead. Without `enforce`, the skills only instruct the agent.
 
@@ -205,13 +225,26 @@ velociredactor grep [OPTIONS] PATTERN [PATH...]
     -A/-B/-C NUM         Lines of context after / before / around
     -m, --max-count NUM  Matching lines per file
 
+velociredactor scan [OPTIONS] [PATH...]
+        --config FILE      Configuration file (default: found per file)
+        --unprotected      Only files no agent section protects (not read)
+    -l, --files-with-matches  Print only paths
+        --json             Emit JSON
+    -g, --glob GLOB        Include (or with `!`, exclude) paths
+        --skip-hidden      Skip hidden files (scanned by default)
+        --skip-ignored     Skip files ignore files exclude (scanned by default)
+        --all-dirs         Also scan dependency and build directories
+    -L, --follow           Follow symbolic links
+    -d, --max-depth NUM    Limit directory depth
+        --max-filesize SIZE  Skip larger files (default 10M)
+
 velociredactor formats
 velociredactor config show [--config FILE]
 velociredactor config location [--config FILE]
 velociredactor config validate [--config FILE]
 velociredactor privacy_filter download [--dir DIR] [--repo OWNER/NAME]
                                          [--revision REV]
-velociredactor agent status [--json] [--config FILE]
+velociredactor agent status [--json] [--no-scan] [--privacy-filter] [--config FILE]
 velociredactor agent check FILE... [--config FILE]
 velociredactor agent init --protect GLOB... [--exclude GLOB...] [--enforce]
 velociredactor agent skill [NAME]      Print an agent skill, or list them
