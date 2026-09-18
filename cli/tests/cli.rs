@@ -9,7 +9,7 @@ const S: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 const BUILTIN: &str = include_str!("../../default_config.yml");
 
 /// The command-line manual built into the binary.
-const CLI_README: &str = include_str!("../../README.md");
+const CLI_README: &str = include_str!("../README.md");
 
 /// Environment variable the binary reads for a configuration file.
 const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";

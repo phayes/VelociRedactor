@@ -132,7 +132,7 @@ struct AgentInitArgs {
 const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
 
 /// The complete command-line manual embedded in the binary.
-const CLI_README: &str = include_str!("../../README.md");
+const CLI_README: &str = include_str!("../README.md");
 
 /// Names accepted for a discovered configuration file, in preference order.
 const CONFIG_FILE_NAMES: [&str; 2] = ["velociredactor.yml", "VELOCIREDACTOR.yml"];
