@@ -87,3 +87,8 @@ toml_edit = "0.25"
 [[bench]]
 name = "redact"
 harness = false
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
