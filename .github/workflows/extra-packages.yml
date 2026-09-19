@@ -1,0 +1,217 @@
+name: Publish extra packages (deb, scoop, plugin)
+
+# Runs after cargo-dist's release.yml has created the GitHub Release and
+# uploaded all platform archives, so those assets are guaranteed to exist.
+on:
+  release:
+    types: [published]
+
+jobs:
+  deb:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir dl
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "velociredactor-cli-${{ matrix.target }}.tar.xz" \
+            --dir dl
+
+      - name: Extract binary
+        run: |
+          mkdir extracted
+          # cargo-dist wraps archive contents in a velociredactor-cli-<target>/ directory.
+          tar -xJf "dl/velociredactor-cli-${{ matrix.target }}.tar.xz" -C extracted --strip-components=1
+
+      - name: Build .deb
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          ./scripts/build-deb.sh veloci "$VERSION" "${{ matrix.arch }}" \
+            extracted/veloci \
+            "Command-line interface for Veloci Redactor: redact secrets and PII from text and structured files" \
+            "https://github.com/phayes/velociredactor" \
+            extracted
+
+      - name: Upload .deb to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            veloci_*_${{ matrix.arch }}.deb
+
+  scoop:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download windows archive + checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir dl
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "velociredactor-cli-x86_64-pc-windows-msvc.zip*" \
+            --dir dl
+
+      - name: Generate manifest
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          SHA=$(awk '{print $1}' dl/velociredactor-cli-x86_64-pc-windows-msvc.zip.sha256)
+          ./scripts/gen-scoop-manifest.sh veloci "$VERSION" \
+            "Command-line interface for Veloci Redactor: redact secrets and PII from text and structured files" \
+            "https://github.com/phayes/velociredactor" \
+            "MIT" \
+            VelociRedactor "$TAG" \
+            velociredactor-cli-x86_64-pc-windows-msvc.zip veloci "$SHA"
+
+      - name: Publish to scoop-bucket
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/phayes/scoop-bucket.git" bucket-repo
+          cp veloci.json bucket-repo/bucket/veloci.json
+          cd bucket-repo
+          git config user.email "patrick.d.hayes@gmail.com"
+          git config user.name "Patrick Hayes"
+          git add bucket/veloci.json
+          if git diff --cached --quiet; then
+            echo "manifest unchanged, nothing to push"
+            exit 0
+          fi
+          git commit -m "veloci ${{ github.event.release.tag_name }}"
+          git push
+
+  # cargo-dist's target list (aarch64-apple-darwin, x86_64-apple-darwin,
+  # aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc)
+  # doesn't include Windows ARM64, so the plugin's binary for that platform is
+  # built here rather than lifted from a cargo-dist release archive.
+  plugin-winarm64:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - name: Build aarch64-pc-windows-msvc (plugin only)
+        run: cargo build --release --locked --package velociredactor-cli --target aarch64-pc-windows-msvc
+        env:
+          RUSTFLAGS: -C strip=symbols
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winarm64-binary
+          path: target/aarch64-pc-windows-msvc/release/veloci.exe
+
+  plugin:
+    if: ${{ !github.event.release.prerelease }}
+    needs: plugin-winarm64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: winarm64-binary
+          path: winarm64
+
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir dl
+          for asset in \
+            velociredactor-cli-aarch64-apple-darwin.tar.xz \
+            velociredactor-cli-x86_64-apple-darwin.tar.xz \
+            velociredactor-cli-aarch64-unknown-linux-gnu.tar.xz \
+            velociredactor-cli-x86_64-unknown-linux-gnu.tar.xz \
+            velociredactor-cli-x86_64-pc-windows-msvc.zip; do
+            gh release download "${{ github.event.release.tag_name }}" \
+              --repo "${{ github.repository }}" \
+              --pattern "$asset" \
+              --dir dl
+          done
+
+      - name: Assemble libexec binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p plugin/libexec
+
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            extract="extracted-${target}"
+            mkdir -p "$extract"
+            tar -xJf "dl/velociredactor-cli-${target}.tar.xz" -C "$extract" --strip-components=1
+            cp "$extract/veloci" "plugin/libexec/velociredactor-${target}"
+          done
+
+          extract="extracted-x86_64-pc-windows-msvc"
+          mkdir -p "$extract"
+          unzip -q "dl/velociredactor-cli-x86_64-pc-windows-msvc.zip" -d "$extract"
+          cp "$extract"/*/veloci.exe "plugin/libexec/velociredactor-x86_64-pc-windows-msvc.exe"
+
+          cp winarm64/veloci.exe "plugin/libexec/velociredactor-aarch64-pc-windows-msvc.exe"
+
+      - name: Assemble plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ github.event.release.tag_name }}"
+          version="${version#v}"
+
+          # Artifacts lose the executable bit; the launcher's is kept by git.
+          chmod +x plugin/bin/veloci plugin/libexec/*
+          for target in \
+            aarch64-apple-darwin x86_64-apple-darwin \
+            aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu \
+            aarch64-pc-windows-msvc.exe x86_64-pc-windows-msvc.exe; do
+            test -f "plugin/libexec/velociredactor-${target}" || { echo "missing velociredactor-${target}" >&2; exit 1; }
+          done
+
+          # Claude Code detects updates by plugin.json's version.
+          jq --arg v "$version" '.version = $v' plugin/.claude-plugin/plugin.json > plugin.json.tmp
+          mv plugin.json.tmp plugin/.claude-plugin/plugin.json
+
+          plugin/bin/veloci --version
+
+      - name: Validate plugin
+        run: npx --yes @anthropic-ai/claude-code plugin validate ./plugin
+
+      - name: Package plugin
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (cd plugin && zip -r -X ../dist/velociredactor-plugin.zip .)
+          (cd dist && sha256sum velociredactor-plugin.zip > velociredactor-plugin.zip.sha256)
+
+      - name: Upload plugin to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            dist/velociredactor-plugin.zip dist/velociredactor-plugin.zip.sha256
