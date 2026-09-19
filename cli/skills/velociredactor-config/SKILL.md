@@ -1,29 +1,29 @@
 ---
 name: velociredactor-config
-description: Customize what velociredactor redacts by editing velociredactor.yml. Covers fixing false positives with allow lists, catching missed secrets with custom regexes, rulesets, exact values or key paths, turning on personal-data (PII) detection or the OpenAI Privacy Filter model, tuning entropy, and changing which files agents must read redacted. Use when redaction hides too much or too little, or the user asks to configure, tune, or extend velociredactor.
+description: Customize what Veloci Redactor redacts by editing veloci.yml. Covers fixing false positives with allow lists, catching missed secrets with custom regexes, rulesets, exact values or key paths, turning on personal-data (PII) detection or the OpenAI Privacy Filter model, tuning entropy, and changing which files agents must read redacted. Use when redaction hides too much or too little, or the user asks to configure, tune, or extend Veloci Redactor.
 license: MIT
-compatibility: Requires the velociredactor CLI on PATH.
+compatibility: Requires the veloci CLI on PATH.
 ---
 
-# Customizing velociredactor
+# Customizing Veloci Redactor
 
 All behavior comes from one YAML file. You change it in three steps: **find the file, edit it, then verify.**
 
 ## Find the file
 
 ```sh
-velociredactor config location   # path, or [builtin-default]
+veloci config location   # path, or [builtin-default]
 ```
 
-The config file is chosen in this order: `--config FILE`, then `$VELOCIREDACTOR_CONFIG`, then `velociredactor.yml` or `VELOCIREDACTOR.yml` in the current directory or a parent (stopping at the git root). If none of those exists, the built-in config is used.
+The config file is chosen in this order: `--config FILE`, then `$VELOCIREDACTOR_CONFIG`, then `veloci.yml` or `VELOCI.yml` in the current directory or a parent (stopping at the git root). If none of those exists, the built-in config is used.
 
 **A config file replaces the built-in configuration completely.** Nothing is merged. So never create a config from scratch with only the section you need. Start from the full built-in one:
 
 ```sh
-velociredactor config show > velociredactor.yml
+veloci config show > veloci.yml
 ```
 
-`velociredactor agent init` also writes a complete file.
+`veloci agent init` also writes a complete file.
 
 ## Make the change
 
@@ -47,7 +47,7 @@ velociredactor config show > velociredactor.yml
 | Secrets in comments | `comments: true` | |
 | Which files agents read redacted | `agent.protected`, `agent.exclude`, `agent.enforce` | `protected: [".env*", "secrets/"]` |
 
-Custom regex detector. Add it under `detectors:`. The `label` appears in `velociredactor list` output:
+Custom regex detector. Add it under `detectors:`. The `label` appears in `veloci list` output:
 
 ```yaml
   - regex:
@@ -63,23 +63,23 @@ Patterns use Rust `regex` syntax and are not anchored. List a `regex` detector a
 Privacy Filter model: it's slow, uses up to 16 GB of memory, and is a 2.6 GB download. Confirm with the user before turning it on.
 
 ```sh
-velociredactor privacy_filter download   # prints the entry to paste under detectors
+veloci privacy_filter download   # prints the entry to paste under detectors
 ```
 
-Full reference: [references/config-reference.md](references/config-reference.md). The file printed by `velociredactor config show` is itself documented, so read the comments near what you're changing.
+Full reference: [references/config-reference.md](references/config-reference.md). The file printed by `veloci config show` is itself documented, so read the comments near what you're changing.
 
 ## Verify
 
 ```sh
-velociredactor config validate                  # exit 0 = usable; warnings/errors on stderr
-velociredactor list path/to/sample              # which detector fired, where; values hidden
-velociredactor list path/to/sample --json       # same, machine-readable
-velociredactor redact --check path/to/sample    # exit 1 if anything is still redacted
-velociredactor scan                             # every file with findings, before and after a change
+veloci config validate                  # exit 0 = usable; warnings/errors on stderr
+veloci list path/to/sample              # which detector fired, where; values hidden
+veloci list path/to/sample --json       # same, machine-readable
+veloci redact --check path/to/sample    # exit 1 if anything is still redacted
+veloci scan                             # every file with findings, before and after a change
 ```
 
-After a change that should cut false positives or catch new secrets, compare `velociredactor scan` over the project from before and after the change. That shows which files it affected.
+After a change that should cut false positives or catch new secrets, compare `veloci scan` over the project from before and after the change. That shows which files it affected.
 
-To check a single value without writing it to disk, pipe it in: `printf 'KEY=value\n' | velociredactor list`. Don't use `--show-value` to check your work. The `DETECTOR` column and the positions are enough to confirm a fix. Only the user may decide to look at values.
+To check a single value without writing it to disk, pipe it in: `printf 'KEY=value\n' | veloci list`. Don't use `--show-value` to check your work. The `DETECTOR` column and the positions are enough to confirm a fix. Only the user may decide to look at values.
 
-When you're done, tell the user what you changed and why. Remind them to commit `velociredactor.yml` so the whole team shares the rules.
+When you're done, tell the user what you changed and why. Remind them to commit `veloci.yml` so the whole team shares the rules.

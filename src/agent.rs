@@ -1,8 +1,8 @@
-//! Files an AI coding agent must read through velociredactor.
+//! Files an AI coding agent must read through Veloci Redactor.
 //!
 //! The `agent` section of a configuration names the files in a project that
 //! agents must never read directly: they read the redacted output of
-//! `velociredactor redact` instead. The section only records which files those
+//! `veloci redact` instead. The section only records which files those
 //! are; the agent skills and hooks that act on it live outside this crate.
 
 use std::path::{Path, PathBuf};

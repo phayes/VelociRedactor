@@ -1,4 +1,4 @@
-//! The configuration: everything velociredactor knows, as data.
+//! The configuration: everything Veloci Redactor knows, as data.
 //!
 //! A [`Config`] says which values are looked at ([`policy`](Config::policy)),
 //! which of them are documentation rather than secrets
@@ -17,11 +17,11 @@
 //! copy:
 //!
 //! ```text
-//! velociredactor config show > my-config.yml
+//! veloci config show > my-config.yml
 //! ```
 //!
 //! The CLI reads that file from `--config`, then `$VELOCIREDACTOR_CONFIG`,
-//! then a `velociredactor.yml` discovered by walking from the current
+//! then a `veloci.yml` discovered by walking from the current
 //! directory, then the built-in configuration.
 //!
 //! The sections that decide what is scanned are required for that reason:
@@ -48,7 +48,7 @@ use crate::{Allow, Error, Redactor, RedactorBuilder};
 /// The configuration built into this binary.
 const DEFAULT_CONFIG: &str = include_str!("../default_config.yml");
 
-/// Everything velociredactor knows: what to scan, what looks for secrets in it,
+/// Everything Veloci Redactor knows: what to scan, what looks for secrets in it,
 /// and the rules over the result.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -516,7 +516,7 @@ mod tests {
         let err = config
             .redactor()
             .err()
-            .expect("a format velociredactor does not know is an error")
+            .expect("a format Veloci Redactor does not know is an error")
             .to_string();
         assert!(err.contains("jsn"), "{err}");
     }

@@ -1,24 +1,24 @@
 ---
 name: velociredactor
-description: Read and search sensitive files through velociredactor (`velociredactor redact`, `velociredactor grep`) so secrets and personal data never reach the model. Use before reading, searching, or quoting .env files, credentials, keys and certificates, config with passwords or tokens, logs, database dumps, Terraform state, HAR files, customer data exports, or any file the user calls sensitive or that the project's velociredactor.yml protects. Also use when a file's output from a tool might contain secrets.
+description: Read and search sensitive files through Veloci Redactor (`veloci redact`, `veloci grep`) so secrets and personal data never reach the model. Use before reading, searching, or quoting .env files, credentials, keys and certificates, config with passwords or tokens, logs, database dumps, Terraform state, HAR files, customer data exports, or any file the user calls sensitive or that the project's veloci.yml protects. Also use when a file's output from a tool might contain secrets.
 license: MIT
-compatibility: Requires the velociredactor CLI on PATH (cargo install velociredactor-cli).
+compatibility: Requires the veloci CLI on PATH (cargo install velociredactor-cli).
 ---
 
-# Reading sensitive files with velociredactor
+# Reading sensitive files with Veloci Redactor
 
-`velociredactor` prints a file with every secret and piece of personal data replaced by a numbered token such as `REDACTION-1`. The rest of the file is unchanged, including keys, comments and formatting. Read sensitive files through it, so the raw values never enter your context.
+`veloci` prints a file with every secret and piece of personal data replaced by a numbered token such as `REDACTION-1`. The rest of the file is unchanged, including keys, comments and formatting. Read sensitive files through it, so the raw values never enter your context.
 
 ## Step 0: check the project is set up
 
 Run this once per session, before the first sensitive read:
 
 ```sh
-velociredactor agent status
+veloci agent status
 ```
 
-- If it says **`not configured`**, the user hasn't chosen which files to protect. The output lists likely candidates, by file name and by contents. Follow the `velociredactor-setup` skill first, then come back here. If that skill isn't installed, `velociredactor agent skill setup` prints it.
-- If the command is **not found**, tell the user velociredactor is missing and how to install it:
+- If it says **`not configured`**, the user hasn't chosen which files to protect. The output lists likely candidates, by file name and by contents. Follow the `velociredactor-setup` skill first, then come back here. If that skill isn't installed, `veloci agent skill setup` prints it.
+- If the command is **not found**, tell the user Veloci Redactor is missing and how to install it:
   ```sh
   cargo install velociredactor-cli
   ```
@@ -26,52 +26,52 @@ velociredactor agent status
 
 Once the project is configured, `agent status` also lists **unprotected files whose contents hold likely secrets**. It finds them by redacting files in memory and prints paths and detector names, never values. It doesn't open protected files. It includes hidden and `.gitignore`d files, and skips Git's files, dependency and build directories, and binary files.
 
-Treat every file on that list as protected for the rest of the session: read it with `velociredactor redact`, and search it with `velociredactor grep`. Tell the user which files it found, and offer to add them to the `agent:` section so the choice sticks. The `velociredactor-setup` skill covers changing the section.
+Treat every file on that list as protected for the rest of the session: read it with `veloci redact`, and search it with `veloci grep`. Tell the user which files it found, and offer to add them to the `agent:` section so the choice sticks. The `velociredactor-setup` skill covers changing the section.
 
 The status list stops at 20 files, and it leaves out the slow `privacy_filter` detector even when the project enables it. For the full list, with every detector the project enables:
 
 ```sh
-velociredactor scan --unprotected -l   # one path per line; exit 1 = some found
+veloci scan --unprotected -l   # one path per line; exit 1 = some found
 ```
 
-If the user doesn't want file contents read at all, `velociredactor agent status --no-scan` skips the scan.
+If the user doesn't want file contents read at all, `veloci agent status --no-scan` skips the scan.
 
 ## Before reading a file
 
 ```sh
-velociredactor agent check path/to/file   # exit 1 = protected, 0 = not
+veloci agent check path/to/file   # exit 1 = protected, 0 = not
 ```
 
-Read the file through velociredactor when **any** of these is true:
+Read the file through veloci when **any** of these is true:
 
 - `agent check` exits 1. The project says so.
-- `agent status` or `velociredactor scan --unprotected` listed it at the start of the session, or `velociredactor scan path/to/file` exits 1 now. Its contents hold secrets.
+- `agent status` or `veloci scan --unprotected` listed it at the start of the session, or `veloci scan path/to/file` exits 1 now. Its contents hold secrets.
 - The file looks sensitive even though neither command flagged it. Examples: a `.env`, a key, a dump, a log with request bodies, or a customer export.
 
-A new file, one generated since the session began, or one outside the project hasn't been scanned. `velociredactor scan FILE...` checks it before you read it.
+A new file, one generated since the session began, or one outside the project hasn't been scanned. `veloci scan FILE...` checks it before you read it.
 
 To read it redacted:
 
 ```sh
-velociredactor redact path/to/file
-velociredactor redact path/to/file --format yaml   # when the extension misleads
-velociredactor redact path/to/file --raw           # treat as plain text
-some-command | velociredactor redact               # redact a command's output
+veloci redact path/to/file
+veloci redact path/to/file --format yaml   # when the extension misleads
+veloci redact path/to/file --raw           # treat as plain text
+some-command | veloci redact               # redact a command's output
 ```
 
-To see only *what* is sensitive, without the document, use `velociredactor list path/to/file`. Add `--json` to get machine-readable output.
+To see only *what* is sensitive, without the document, use `veloci list path/to/file`. Add `--json` to get machine-readable output.
 
 Never read a protected file any other way. That includes your file-read tool, `cat`, `head`, `tail`, `less`, `sed -n`, `jq`, `yq`, and loading it in a script whose output you see.
 
 ## Searching
 
-`velociredactor grep` takes ripgrep's options and prints matches from the redacted text of each file. Use it instead of your search tool, `grep` or `rg` whenever a search could reach a protected file. That includes a search of a directory holding one, such as the repository root.
+`veloci grep` takes ripgrep's options and prints matches from the redacted text of each file. Use it instead of your search tool, `grep` or `rg` whenever a search could reach a protected file. That includes a search of a directory holding one, such as the repository root.
 
 ```sh
-velociredactor grep 'DATABASE_URL' .                 # recursive, like rg
-velociredactor grep -i -n 'timeout' config/ -g '*.yml'
-velociredactor grep -F 'api.example.com' --hidden .  # hidden files, e.g. .env
-velociredactor grep -l 'password' .                  # file names only
+veloci grep 'DATABASE_URL' .                 # recursive, like rg
+veloci grep -i -n 'timeout' config/ -g '*.yml'
+veloci grep -F 'api.example.com' --hidden .  # hidden files, e.g. .env
+veloci grep -l 'password' .                  # file names only
 ```
 
 - Like ripgrep, it skips hidden and `.gitignore`d files unless you pass `--hidden` or `--no-ignore`. Files like `.env` are usually both.
@@ -99,11 +99,11 @@ Your view of the file is redacted, so the rules for editing it are strict:
 
 ## Sharing output
 
-Before putting file contents, logs, or command output anywhere outside this machine, pass them through `velociredactor redact`. That includes issues, pull requests, commit messages, chat and web tools. The `velociredactor-share` skill has the details (`velociredactor agent skill share`).
+Before putting file contents, logs, or command output anywhere outside this machine, pass them through `veloci redact`. That includes issues, pull requests, commit messages, chat and web tools. The `velociredactor-share` skill has the details (`veloci agent skill share`).
 
 ## When redaction is wrong
 
 - **False positives:** a value is redacted but isn't sensitive, and you need to see it. Ask the user to allow it. Don't work around the redaction.
 - **Missed secrets:** you notice a secret that wasn't redacted. Tell the user, and don't repeat the value.
 
-Either way, the fix belongs in `velociredactor.yml`. The `velociredactor-config` skill covers how (`velociredactor agent skill config`).
+Either way, the fix belongs in `veloci.yml`. The `velociredactor-config` skill covers how (`veloci agent skill config`).

@@ -1,15 +1,15 @@
-# velociredactor agent skills
+# Veloci Redactor agent skills
 
-These skills make AI coding agents read and search sensitive files through `velociredactor`. Secrets and personal data are replaced by `REDACTION-N` tokens before they reach the model.
+These skills make AI coding agents read and search sensitive files through `veloci`. Secrets and personal data are replaced by `REDACTION-N` tokens before they reach the model.
 
 | Skill | What it does |
 |---|---|
-| [`velociredactor`](skills/velociredactor/SKILL.md) | Reads protected or sensitive files with `velociredactor redact`, searches them with `velociredactor grep`, and edits them without ever writing a `REDACTION-N` token back. |
-| [`velociredactor-setup`](skills/velociredactor-setup/SKILL.md) | On first use in a project, asks which files to protect and records the answer in `velociredactor.yml`. |
+| [`velociredactor`](skills/velociredactor/SKILL.md) | Reads protected or sensitive files with `veloci redact`, searches them with `veloci grep`, and edits them without ever writing a `REDACTION-N` token back. |
+| [`velociredactor-setup`](skills/velociredactor-setup/SKILL.md) | On first use in a project, asks which files to protect and records the answer in `veloci.yml`. |
 | [`velociredactor-config`](skills/velociredactor-config/SKILL.md) | Customizes detection: allow lists, custom patterns, PII, the Privacy Filter model, and the protected files. |
 | [`velociredactor-share`](skills/velociredactor-share/SKILL.md) | Redacts logs and other output before they go into issues, pull requests, chat or web tools. |
 
-Every skill needs the `velociredactor` binary on `PATH`. The Claude Code plugin bundles it for macOS, Linux and Windows (x86_64 and arm64). Other agents need it installed:
+Every skill needs the `veloci` binary on `PATH`. The Claude Code plugin bundles it for macOS, Linux and Windows (x86_64 and arm64). Other agents need it installed:
 
 ```console
 cargo install velociredactor-cli
@@ -24,7 +24,7 @@ cargo install velociredactor-cli
 /plugin install velociredactor@velociredactor
 ```
 
-The plugin installs the four skills, a `PreToolUse` hook and the `velociredactor` binary. Each release attaches the plugin as `velociredactor-plugin.zip`, and the marketplace installs the latest one. The hook does nothing unless a project turns on `enforce` (see below).
+The plugin installs the four skills, a `PreToolUse` hook and the `veloci` binary. Each release attaches the plugin as `velociredactor-plugin.zip`, and the marketplace installs the latest one. The hook does nothing unless a project turns on `enforce` (see below).
 
 ### Other agents
 
@@ -50,13 +50,13 @@ Only Claude Code gets the enforcing hook. In other agents the skills work by ins
 
 ## Choosing the protected files
 
-The first time the skills are used in a project, the agent runs `velociredactor agent status`. If the project hasn't chosen its protected files yet, the agent:
+The first time the skills are used in a project, the agent runs `veloci agent status`. If the project hasn't chosen its protected files yet, the agent:
 
-1. finds likely candidates by file name, and files whose contents hold secrets (`velociredactor scan`, which never shows the values; `agent status --no-scan` skips reading contents);
+1. finds likely candidates by file name, and files whose contents hold secrets (`veloci scan`, which never shows the values; `agent status --no-scan` skips reading contents);
 2. asks you which to protect, what to exclude, and whether to enforce;
-3. writes your answer with `velociredactor agent init`.
+3. writes your answer with `veloci agent init`.
 
-The answer lives in the `agent` section of `velociredactor.yml`. Commit that file, so every teammate and agent shares it:
+The answer lives in the `agent` section of `veloci.yml`. Commit that file, so every teammate and agent shares it:
 
 ```yaml
 agent:
@@ -69,19 +69,19 @@ agent:
   enforce: true
 ```
 
-Patterns follow `.gitignore` conventions, relative to `velociredactor.yml`.
+Patterns follow `.gitignore` conventions, relative to `veloci.yml`.
 
 ## Enforcement
 
-With `enforce: true`, the Claude Code plugin's hook runs `velociredactor agent hook` before every Read and Grep tool call:
+With `enforce: true`, the Claude Code plugin's hook runs `veloci agent hook` before every Read and Grep tool call:
 
-- **Read of a protected file:** denied. The agent is told to run `velociredactor redact FILE`.
-- **Grep of a protected file, or of a directory holding one:** denied. The agent is told the exact `velociredactor grep` command to run instead. The directory walk follows ripgrep's rules, so files that `.gitignore` excludes don't count, because the Grep tool wouldn't search them either.
+- **Read of a protected file:** denied. The agent is told to run `veloci redact FILE`.
+- **Grep of a protected file, or of a directory holding one:** denied. The agent is told the exact `veloci grep` command to run instead. The directory walk follows ripgrep's rules, so files that `.gitignore` excludes don't count, because the Grep tool wouldn't search them either.
 
 Limits:
 
 - Shell commands such as `cat .env` are not intercepted. The skills tell the agent not to run them, but that is an instruction, not a guarantee.
-- If `velociredactor` isn't installed, or the configuration is broken, the hook fails without blocking. It never stops the agent from reading anything at all.
+- If `veloci` isn't installed, or the configuration is broken, the hook fails without blocking. It never stops the agent from reading anything at all.
 
 ## Developing
 
@@ -91,4 +91,4 @@ claude plugin validate ./plugin     # the plugin
 claude --plugin-dir ./plugin        # try the checkout
 ```
 
-A checkout has no `libexec/`, so `bin/velociredactor` falls back to a `velociredactor` installed elsewhere on `PATH`. Tagged releases build a binary for each target into `libexec/`, stamp the tag's version into `plugin.json` and publish the zip (see `.github/workflows/rust.yml`).
+A checkout has no `libexec/`, so `bin/veloci` falls back to a `veloci` installed elsewhere on `PATH`. Tagged releases build a binary for each target into `libexec/`, stamp the tag's version into `plugin.json` and publish the zip (see `.github/workflows/rust.yml`).

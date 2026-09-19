@@ -71,7 +71,7 @@ jobs:
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           ext=".exe"
         fi
-        exe="velociredactor${ext}"
+        exe="veloci${ext}"
 
         stage="velociredactor-${version}-${target}"
         mkdir -p "$stage" dist
@@ -123,7 +123,7 @@ jobs:
         version="${GITHUB_REF_NAME#v}"
 
         # Artifacts lose the executable bit; the launcher's is kept by git.
-        chmod +x plugin/bin/velociredactor plugin/libexec/*
+        chmod +x plugin/bin/veloci plugin/libexec/*
         for target in \
           aarch64-apple-darwin x86_64-apple-darwin \
           aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu \
@@ -135,7 +135,7 @@ jobs:
         jq --arg v "$version" '.version = $v' plugin/.claude-plugin/plugin.json > plugin.json.tmp
         mv plugin.json.tmp plugin/.claude-plugin/plugin.json
 
-        plugin/bin/velociredactor --version
+        plugin/bin/veloci --version
     - name: Validate plugin
       run: npx --yes @anthropic-ai/claude-code plugin validate ./plugin
     - name: Package plugin

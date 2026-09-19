@@ -27,15 +27,15 @@ use crate::util::{
 /// Equal values share a number.
 ///
 /// Configuration defines what counts as a secret.
-/// `velociredactor config show` prints the built-in rules as a starting point:
+/// `veloci config show` prints the built-in rules as a starting point:
 ///
-///     velociredactor config show > velociredactor.yml
-///     velociredactor redact secrets.json
+///     veloci config show > veloci.yml
+///     veloci redact secrets.json
 ///
-/// Configuration is chosen in this order: `--config`, `$VELOCIREDACTOR_CONFIG`, a discovered `velociredactor.yml` or `VELOCIREDACTOR.yml`, and the built-in configuration.
+/// Configuration is chosen in this order: `--config`, `$VELOCIREDACTOR_CONFIG`, a discovered `veloci.yml` or `VELOCI.yml`, and the built-in configuration.
 /// Discovery stops at a Git repository root, the home directory when running inside it, or the filesystem root.
 #[derive(Debug, Parser)]
-#[command(version, about, long_about)]
+#[command(name = "veloci", version, about, long_about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -81,14 +81,14 @@ enum Command {
     /// Choose and check the files AI coding agents must read redacted.
     ///
     /// Coding agents send everything they read to their model. A project lists
-    /// its sensitive files in the `agent` section of `velociredactor.yml`, and
-    /// agents read those files with `velociredactor redact FILE` and search
-    /// them with `velociredactor grep`, never directly.
+    /// its sensitive files in the `agent` section of `veloci.yml`, and
+    /// agents read those files with `veloci redact FILE` and search
+    /// them with `veloci grep`, never directly.
     ///
-    /// AI agents: run `velociredactor agent skill velociredactor` for complete
-    /// instructions, then `velociredactor agent status` to see whether this project has
+    /// AI agents: run `veloci agent skill velociredactor` for complete
+    /// instructions, then `veloci agent status` to see whether this project has
     /// chosen its files. If it has not, ask the user which files to protect
-    /// before running `velociredactor agent init`. If it has, `velociredactor
+    /// before running `veloci agent init`. If it has, `veloci
     /// scan --unprotected` lists files holding secrets that it leaves out.
     #[command(subcommand)]
     Agent(AgentCommand),
@@ -109,11 +109,11 @@ enum AgentCommand {
     /// Print the configuration's `agent` section, or that it has none.
     ///
     /// Also lists the files whose contents hold secrets that no `agent`
-    /// section protects, as `velociredactor scan --unprotected` finds them,
+    /// section protects, as `veloci scan --unprotected` finds them,
     /// but without the slow `privacy_filter` detector. Values are never
     /// shown, and protected files are not read. When the project has not
     /// chosen its protected files yet, also suggests file name patterns, and
-    /// how to record a choice with `velociredactor agent init`.
+    /// how to record a choice with `veloci agent init`.
     Status(AgentStatusArgs),
     /// Print which of the given files agents must read redacted, and exit 1
     /// if any.
@@ -121,18 +121,18 @@ enum AgentCommand {
     /// Record which files agents must read redacted.
     ///
     /// Adds an `agent` section to the configuration in use, or creates
-    /// `velociredactor.yml` at the repository root from the built-in
+    /// `veloci.yml` at the repository root from the built-in
     /// configuration when there is none. It refuses to replace an existing
     /// `agent` section; edit that in the file instead.
     ///
     /// AI agents: the user decides what is protected. Run
-    /// `velociredactor agent status` to see candidates, ask the user which to
+    /// `veloci agent status` to see candidates, ask the user which to
     /// protect, what to exclude, and whether to enforce, and only then run
-    /// this. `velociredactor agent skill setup` has the full procedure.
+    /// this. `veloci agent skill setup` has the full procedure.
     #[command(after_long_help = INIT_HELP)]
     Init(AgentInitArgs),
     /// Print the instructions (Agent Skills) for AI agents using
-    /// velociredactor.
+    /// Veloci Redactor.
     ///
     /// With no name, lists the skills; start with `velociredactor`, which
     /// covers reading, searching and editing protected files. The same skills install as a Claude Code plugin or
@@ -187,7 +187,7 @@ struct AgentInitArgs {
     exclude: Vec<String>,
 
     /// Block agents' own read and search tools on protected files, where the
-    /// agent supports hooks (Claude Code with the velociredactor plugin),
+    /// agent supports hooks (Claude Code with the Veloci Redactor plugin),
     /// instead of only instructing them.
     #[arg(long)]
     enforce: bool,
@@ -208,18 +208,18 @@ struct AgentSkillArgs {
 
 /// Examples and pattern syntax for `agent init --help`.
 const INIT_HELP: &str = "\
-Patterns follow .gitignore conventions, relative to velociredactor.yml:
+Patterns follow .gitignore conventions, relative to veloci.yml:
   .env*            no `/`: a file name at any depth
   config/prod.yml  a `/`: anchored at the project root
   secrets/         a trailing `/`: everything in the directory
   exports/**/*.csv `*` stays in one path segment, `**` spans segments
 
 Examples:
-  velociredactor agent init --protect '.env*' --exclude .env.example
-  velociredactor agent init --protect '.env*' --protect '*.pem' \\
+  veloci agent init --protect '.env*' --exclude .env.example
+  veloci agent init --protect '.env*' --protect '*.pem' \\
       --protect secrets/ --protect '*.log' --enforce
 
-Change the choice later by editing the `agent` section of velociredactor.yml.";
+Change the choice later by editing the `agent` section of veloci.yml.";
 
 /// An agent skill embedded in the binary.
 struct Skill {
@@ -249,7 +249,7 @@ const SKILLS: &[Skill] = &[
     },
     Skill {
         name: "velociredactor-config",
-        summary: "Customizing what is redacted in velociredactor.yml.",
+        summary: "Customizing what is redacted in veloci.yml.",
         text: include_str!("../skills/velociredactor-config/SKILL.md"),
         references: &[(
             "references/config-reference.md",
@@ -351,7 +351,7 @@ impl InputArgs {
     }
 
     /// The rules to apply, in order: `--config`, `$VELOCIREDACTOR_CONFIG`,
-    /// a discovered `velociredactor.yml`, or the built-in configuration.
+    /// a discovered `veloci.yml`, or the built-in configuration.
     fn config(&self) -> Result<Config> {
         self.config.load()
     }
@@ -580,8 +580,8 @@ fn agent_status(args: &AgentStatusArgs) -> Result<ExitCode> {
         println!("\nUnprotected files whose contents hold likely secrets (values not shown):");
         print!("{}", secrets_list(&secrets));
         println!(
-            "\nAI agents: read and search these only through `velociredactor redact`\n\
-             and `velociredactor grep`, and ask the user whether to add them to the\n\
+            "\nAI agents: read and search these only through `veloci redact`\n\
+             and `veloci grep`, and ask the user whether to add them to the\n\
              agent section of the configuration."
         );
     }
@@ -671,7 +671,7 @@ fn agent_section(args: &AgentInitArgs) -> String {
             .collect()
     };
     let mut section = String::from(
-        "\n# Files AI coding agents must read redacted; see `velociredactor agent`.\nagent:\n  protected:\n",
+        "\n# Files AI coding agents must read redacted; see `veloci agent`.\nagent:\n  protected:\n",
     );
     section.push_str(&list(&args.protect));
     if args.exclude.is_empty() {
@@ -704,7 +704,7 @@ fn agent_hook(args: &ConfigArg) -> Result<ExitCode> {
         }
         Ok(None) => Ok(ExitCode::SUCCESS),
         Err(err) => {
-            eprintln!("velociredactor agent hook: {err:#}");
+            eprintln!("veloci agent hook: {err:#}");
             Ok(ExitCode::from(1))
         }
     }
@@ -748,23 +748,23 @@ fn hook_denial(args: &ConfigArg) -> Result<Option<String>> {
     let shown = target.display().to_string();
     if !grep {
         return Ok(Some(format!(
-            "{shown} is protected by velociredactor. Read it with \
-             `velociredactor redact {}` instead; redacted values appear as \
+            "{shown} is protected by Veloci Redactor. Read it with \
+             `veloci redact {}` instead; redacted values appear as \
              REDACTION-N tokens.",
             shell_quote(&shown),
         )));
     }
     let pattern = tool_input["pattern"].as_str().unwrap_or("PATTERN");
     let within = if protected == target {
-        format!("{shown} is protected by velociredactor")
+        format!("{shown} is protected by Veloci Redactor")
     } else {
         format!(
-            "{shown} holds files protected by velociredactor, such as {}",
+            "{shown} holds files protected by Veloci Redactor, such as {}",
             protected.display()
         )
     };
     Ok(Some(format!(
-        "{within}. Search with `velociredactor grep {} {}` instead: it takes \
+        "{within}. Search with `veloci grep {} {}` instead: it takes \
          ripgrep's options and prints matches from redacted text.",
         shell_quote(pattern),
         shell_quote(&shown),
@@ -813,16 +813,16 @@ fn agent_skill(args: &AgentSkillArgs) -> Result<ExitCode> {
 /// The skills, and how to print them.
 fn skill_list() -> String {
     let mut list = String::from(
-        "Instructions for AI coding agents using velociredactor, as Agent Skills\n\
+        "Instructions for AI coding agents using Veloci Redactor, as Agent Skills\n\
          (https://agentskills.io):\n\n",
     );
     for skill in SKILLS {
         list.push_str(&format!("  {:<24} {}\n", skill.name, skill.summary));
     }
     list.push_str(
-        "\nPrint one with `velociredactor agent skill NAME`; the `velociredactor-`\n\
+        "\nPrint one with `veloci agent skill NAME`; the `velociredactor-`\n\
          prefix is optional. Start with:\n\n\
-         \x20   velociredactor agent skill velociredactor\n\n\
+         \x20   veloci agent skill velociredactor\n\n\
          To install them for an agent instead, copy them into its skills directory\n\
          or add the Claude Code plugin: https://github.com/phayes/velociredactor/tree/master/plugin\n",
     );
@@ -945,7 +945,7 @@ fn find_candidates(root: &Path) -> Vec<Candidate> {
 }
 
 /// The unprotected files under `root` whose contents hold secrets, as
-/// `velociredactor scan --unprotected` finds them, with paths relative to
+/// `veloci scan --unprotected` finds them, with paths relative to
 /// `root`. `skip_model` leaves out the slow `privacy_filter` detector.
 fn find_secrets(root: &Path, config: &ConfigArg, skip_model: bool) -> Result<Vec<scan::Hit>> {
     let report = scan::scan(
@@ -971,7 +971,7 @@ fn secrets_list(secrets: &[scan::Hit]) -> String {
     }
     if secrets.len() > MAX_SECRETS {
         list.push_str(&format!(
-            "  ... and {} more; `velociredactor scan --unprotected` lists them all\n",
+            "  ... and {} more; `veloci scan --unprotected` lists them all\n",
             secrets.len() - MAX_SECRETS
         ));
     }
@@ -982,7 +982,7 @@ fn secrets_list(secrets: &[scan::Hit]) -> String {
 fn not_configured_help(candidates: &[Candidate], secrets: &[scan::Hit]) -> String {
     let mut help = String::from(
         "No files are protected yet. The project chooses which files AI agents\n\
-         must read redacted (with `velociredactor redact` and `velociredactor grep`)\n\
+         must read redacted (with `veloci redact` and `veloci grep`)\n\
          instead of directly.\n\n",
     );
     if candidates.is_empty() {
@@ -1014,9 +1014,9 @@ fn not_configured_help(candidates: &[Candidate], secrets: &[scan::Hit]) -> Strin
         "AI agents: ask the user which of these to protect, what else to add,\n\
          what to exclude, and whether to --enforce (block direct reads where the\n\
          agent supports it). Then record the answer, for example:\n\n\
-         \x20   velociredactor agent init --protect '.env*' --exclude .env.example --enforce\n\n\
-         Pattern syntax: velociredactor agent init --help\n\
-         Full procedure: velociredactor agent skill setup\n",
+         \x20   veloci agent init --protect '.env*' --exclude .env.example --enforce\n\n\
+         Pattern syntax: veloci agent init --help\n\
+         Full procedure: veloci agent skill setup\n",
     );
     help
 }

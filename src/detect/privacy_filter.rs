@@ -127,7 +127,7 @@ impl PrivacyFilterConfig {
 
 /// Where the model is when no `model_dir` is given: the current snapshot of
 /// [`MODEL_REPO`] in the Hugging Face cache, which is where
-/// `velociredactor privacy_filter download` puts it by default.
+/// `veloci privacy_filter download` puts it by default.
 ///
 /// The cache is `$HF_HUB_CACHE` when set, then `$HF_HOME/hub`, then
 /// `$XDG_CACHE_HOME/huggingface/hub`, then `~/.cache/huggingface/hub`.
@@ -137,7 +137,7 @@ pub fn default_model_dir() -> Result<PathBuf, String> {
     let commit = std::fs::read_to_string(repo.join("refs").join("main")).map_err(|_| {
         format!(
             "no model_dir given, and the model is not in the Hugging Face cache ({}); \
-             download it with `velociredactor privacy_filter download`",
+             download it with `veloci privacy_filter download`",
             cache.display()
         )
     })?;
@@ -402,7 +402,7 @@ impl PrivacyFilterDetector {
         let weights = dir.join("model.safetensors");
         if !weights.is_file() {
             return Err(fail(format!(
-                "{} not found; download the model with `velociredactor privacy_filter download`",
+                "{} not found; download the model with `veloci privacy_filter download`",
                 weights.display()
             )));
         }

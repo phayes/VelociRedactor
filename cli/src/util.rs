@@ -25,7 +25,7 @@ use velociredactor::{Allow, Redactor};
 pub const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
 
 /// Names accepted for a discovered configuration file, in preference order.
-pub const CONFIG_FILE_NAMES: [&str; 2] = ["velociredactor.yml", "VELOCIREDACTOR.yml"];
+pub const CONFIG_FILE_NAMES: [&str; 2] = ["veloci.yml", "VELOCI.yml"];
 
 /// Directories of dependencies and build output, never worth looking inside
 /// for a project's own secrets.
@@ -42,13 +42,13 @@ pub const SKIPPED_DIRS: &[&str] = &[
 ];
 
 /// The configuration file, from `--config`, `$VELOCIREDACTOR_CONFIG`, or
-/// a `velociredactor.yml` found by walking from the current directory.
+/// a `veloci.yml` found by walking from the current directory.
 #[derive(Debug, Clone, Args)]
 pub struct ConfigArg {
     /// Configuration file, replacing the built-in one.
     ///
     /// `--config` wins over `$VELOCIREDACTOR_CONFIG`. When both are omitted,
-    /// `velociredactor.yml` or `VELOCIREDACTOR.yml` is looked for in the
+    /// `veloci.yml` or `VELOCI.yml` is looked for in the
     /// current directory and its parents.
     #[arg(short, long, value_name = "FILE", env = CONFIG_ENV)]
     pub config: Option<PathBuf>,
@@ -103,8 +103,8 @@ impl ConfigArg {
     }
 }
 
-/// A `velociredactor.yml` or `VELOCIREDACTOR.yml` found by walking from the
-/// current directory, if one is in reach.
+/// A `veloci.yml` or `VELOCI.yml` found by walking from the current
+/// directory, if one is in reach.
 fn discover_config() -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir().context("determining the current directory")?;
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -555,14 +555,14 @@ mod tests {
     #[test]
     fn finds_a_config_in_the_starting_directory() {
         let root = tempfile::tempdir().unwrap();
-        let want = write_file(root.path(), "velociredactor.yml");
+        let want = write_file(root.path(), "veloci.yml");
         assert_eq!(discover_from(root.path(), Some(root.path())), Some(want));
     }
 
     #[test]
     fn finds_an_uppercase_config_name() {
         let root = tempfile::tempdir().unwrap();
-        write_file(root.path(), "VELOCIREDACTOR.yml");
+        write_file(root.path(), "VELOCI.yml");
         let found =
             discover_from(root.path(), Some(root.path())).expect("uppercase name is accepted");
         assert!(
@@ -577,8 +577,8 @@ mod tests {
     #[test]
     fn prefers_the_lowercase_name_when_both_exist() {
         let root = tempfile::tempdir().unwrap();
-        let lower = write_file(root.path(), "velociredactor.yml");
-        let upper = root.path().join("VELOCIREDACTOR.yml");
+        let lower = write_file(root.path(), "veloci.yml");
+        let upper = root.path().join("VELOCI.yml");
         if upper != lower {
             fs::write(&upper, "other\n").unwrap();
         }
@@ -590,7 +590,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let child = root.path().join("src");
         fs::create_dir(&child).unwrap();
-        let want = write_file(root.path(), "velociredactor.yml");
+        let want = write_file(root.path(), "veloci.yml");
         assert_eq!(discover_from(&child, Some(root.path())), Some(want));
     }
 
@@ -599,8 +599,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let child = root.path().join("src");
         fs::create_dir(&child).unwrap();
-        write_file(root.path(), "velociredactor.yml");
-        let want = write_file(&child, "velociredactor.yml");
+        write_file(root.path(), "veloci.yml");
+        let want = write_file(&child, "veloci.yml");
         assert_eq!(discover_from(&child, Some(root.path())), Some(want));
     }
 
@@ -609,8 +609,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let child = root.path().join("src");
         fs::create_dir(&child).unwrap();
-        fs::create_dir(child.join("velociredactor.yml")).unwrap();
-        let want = write_file(root.path(), "velociredactor.yml");
+        fs::create_dir(child.join("veloci.yml")).unwrap();
+        let want = write_file(root.path(), "veloci.yml");
         assert_eq!(discover_from(&child, Some(root.path())), Some(want));
     }
 
@@ -621,8 +621,8 @@ mod tests {
         let src = repo.join("src");
         fs::create_dir_all(&src).unwrap();
         fs::create_dir(repo.join(".git")).unwrap();
-        let want = write_file(&repo, "velociredactor.yml");
-        write_file(root.path(), "velociredactor.yml");
+        let want = write_file(&repo, "veloci.yml");
+        write_file(root.path(), "veloci.yml");
         assert_eq!(discover_from(&src, Some(root.path())), Some(want));
     }
 
@@ -633,7 +633,7 @@ mod tests {
         let src = repo.join("src");
         fs::create_dir_all(&src).unwrap();
         fs::create_dir(repo.join(".git")).unwrap();
-        write_file(root.path(), "velociredactor.yml");
+        write_file(root.path(), "veloci.yml");
         assert_eq!(discover_from(&src, Some(root.path())), None);
     }
 
@@ -644,7 +644,7 @@ mod tests {
         let src = repo.join("src");
         fs::create_dir_all(&src).unwrap();
         fs::write(repo.join(".git"), "gitdir: /elsewhere/.git/worktrees/x\n").unwrap();
-        write_file(root.path(), "velociredactor.yml");
+        write_file(root.path(), "veloci.yml");
         assert_eq!(discover_from(&src, Some(root.path())), None);
     }
 
@@ -654,8 +654,8 @@ mod tests {
         let home = outer.path().join("home");
         let project = home.join("project");
         fs::create_dir_all(&project).unwrap();
-        let want = write_file(&home, "velociredactor.yml");
-        write_file(outer.path(), "velociredactor.yml");
+        let want = write_file(&home, "veloci.yml");
+        write_file(outer.path(), "veloci.yml");
         assert_eq!(discover_from(&project, Some(&home)), Some(want));
     }
 
@@ -665,7 +665,7 @@ mod tests {
         let home = outer.path().join("home");
         let project = home.join("project");
         fs::create_dir_all(&project).unwrap();
-        write_file(outer.path(), "velociredactor.yml");
+        write_file(outer.path(), "veloci.yml");
         assert_eq!(discover_from(&project, Some(&home)), None);
     }
 
@@ -676,7 +676,7 @@ mod tests {
         let other = outer.path().join("other");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir(&other).unwrap();
-        let want = write_file(outer.path(), "velociredactor.yml");
+        let want = write_file(outer.path(), "veloci.yml");
         assert_eq!(discover_from(&other, Some(&home)), Some(want));
     }
 
@@ -689,8 +689,8 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::create_dir_all(&configured).unwrap();
         fs::create_dir(repo.join(".git")).unwrap();
-        write_file(&repo.join("a/configured"), "velociredactor.yml");
-        write_file(root.path(), "velociredactor.yml");
+        write_file(&repo.join("a/configured"), "veloci.yml");
+        write_file(root.path(), "veloci.yml");
 
         let mut discoveries = Discoveries {
             home: Some(root.path().to_owned()),

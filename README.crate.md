@@ -1,8 +1,8 @@
-<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="velociredactor logo" width="300"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="Veloci Redactor logo" width="300"></p>
 
 # velociredactor
 
-`velociredactor` is a Rust library for redacting secrets and personal data from text and structured files.
+Veloci Redactor (`velociredactor`) is a Rust library for redacting secrets and personal data from text and structured files.
 
 Each redacted value becomes a token named `REDACTION-N`. `N` numbers distinct secrets in order of first appearance, and equal values share a number. Exact values and regular expressions can allow confirmed false positives.
 
@@ -95,4 +95,4 @@ The repository includes a complete custom detector and format in `examples/custo
 
 ## License
 
-velociredactor is available under the [MIT License](https://github.com/phayes/velociredactor/blob/master/LICENSE).
+Veloci Redactor is available under the [MIT License](https://github.com/phayes/velociredactor/blob/master/LICENSE).

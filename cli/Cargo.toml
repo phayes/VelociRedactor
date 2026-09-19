@@ -3,7 +3,7 @@ name = "velociredactor-cli"
 version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
-description = "Command-line interface for velociredactor: redact secrets and PII from text and structured files"
+description = "Command-line interface for Veloci Redactor: redact secrets and PII from text and structured files"
 license = "MIT"
 repository = "https://github.com/phayes/velociredactor"
 homepage = "https://github.com/phayes/velociredactor"
@@ -33,7 +33,7 @@ termcolor = "1"
 velociredactor = { path = "..", version = "0.1.0", features = ["privacy-filter-accelerate"] }
 
 [[bin]]
-name = "velociredactor"
+name = "veloci"
 path = "src/main.rs"
 
 [dev-dependencies]

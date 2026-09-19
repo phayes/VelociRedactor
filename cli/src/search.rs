@@ -1,4 +1,4 @@
-//! `velociredactor grep`: search files, showing matches from their redacted
+//! `veloci grep`: search files, showing matches from their redacted
 //! text.
 //!
 //! Each file is searched twice. The first pass searches the file as it is

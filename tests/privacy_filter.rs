@@ -2,7 +2,7 @@
 //!
 //! The model is 2.6 GB, so these tests run only when
 //! `VELOCIREDACTOR_PF_MODEL` names a directory holding it, as downloaded by
-//! `velociredactor model download --dir DIR`. Build with `--release`: the
+//! `veloci privacy_filter download --dir DIR`. Build with `--release`: the
 //! model is unusably slow unoptimized.
 
 #![cfg(feature = "privacy-filter")]

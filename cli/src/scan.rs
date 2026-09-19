@@ -1,4 +1,4 @@
-//! `velociredactor scan`: find the files that hold secrets.
+//! `veloci scan`: find the files that hold secrets.
 //!
 //! Every file under the given paths is redacted in memory, with the
 //! configuration found from its own directory. Files left with anything to

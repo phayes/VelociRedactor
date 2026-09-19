@@ -1,6 +1,6 @@
-# velociredactor.yml reference
+# veloci.yml reference
 
-This is a condensed guide to every section. The authoritative, fully commented version is the output of `velociredactor config show`, which prints the built-in configuration when no file is in use. A config file replaces the built-in configuration in full, so every required section must be present.
+This is a condensed guide to every section. The authoritative, fully commented version is the output of `veloci config show`, which prints the built-in configuration when no file is in use. A config file replaces the built-in configuration in full, so every required section must be present.
 
 ## Top-level sections
 
@@ -16,7 +16,7 @@ This is a condensed guide to every section. The authoritative, fully commented v
 
 ## formats
 
-The names are `json`, `jsonl`, `yaml`, `toml`, `xml`, `hcl`, `ini`, `dotenv`, `properties`, `csv`, `tsv`, `psv`, `bplist` and `text`. Run `velociredactor formats` to see which file extensions map to each. On the command line, `--format NAME` forces one format, and `--raw` treats the input as plain text.
+The names are `json`, `jsonl`, `yaml`, `toml`, `xml`, `hcl`, `ini`, `dotenv`, `properties`, `csv`, `tsv`, `psv`, `bplist` and `text`. Run `veloci formats` to see which file extensions map to each. On the command line, `--format NAME` forces one format, and `--raw` treats the input as plain text.
 
 ## policy
 
@@ -37,7 +37,7 @@ Placeholders are consulted by `ruleset`, `credentialed_uri`, `connection_string`
 
 ## detectors
 
-Detectors run in the order listed, and a detector that isn't listed doesn't run. `velociredactor list` reports each finding under its detector's name.
+Detectors run in the order listed, and a detector that isn't listed doesn't run. `veloci list` reports each finding under its detector's name.
 
 | Detector | Settings | Finds |
 |---|---|---|
@@ -51,7 +51,7 @@ Detectors run in the order listed, and a detector that isn't listed doesn't run.
 | `pii:email` | `allowlist` (`noreply@`, `@example.org`, exact addresses) | Email addresses. Off by default. |
 | `pii:phone` | none | Phone numbers. Off by default. |
 | `pii:address` | none | Postal addresses. Off by default. |
-| `privacy_filter` | `model_dir`, `device`, `context`, `min_score`, `categories`, `max_tokens`, `viterbi` | Names, addresses, dates, account numbers and other personal data, found by an ML model. Heavy; install it with `velociredactor privacy_filter download`. |
+| `privacy_filter` | `model_dir`, `device`, `context`, `min_score`, `categories`, `max_tokens`, `viterbi` | Names, addresses, dates, account numbers and other personal data, found by an ML model. Heavy; install it with `veloci privacy_filter download`. |
 | `value` | `values` | Exact strings, wherever they appear. |
 | `path` | `paths` (dotted key-path globs) | Everything stored at the given key paths. |
 
@@ -70,7 +70,7 @@ Key-path globs, used by `path` and `allow.paths`: keys are joined with `.`, and 
 
 ```yaml
 agent:
-  protected: [".env*", "*.pem", "secrets/"]   # files agents read only via `velociredactor redact`
+  protected: [".env*", "*.pem", "secrets/"]   # files agents read only via `veloci redact`
   exclude: [".env.example"]                   # never protected
   enforce: true                               # block direct reads where the agent supports hooks
 ```
@@ -83,13 +83,13 @@ The patterns follow `.gitignore` conventions, relative to this file:
 
 Useful commands:
 
-- `velociredactor agent status` prints the agent section.
-- `velociredactor agent check FILE…` exits 1 if any of the files is protected.
+- `veloci agent status` prints the agent section.
+- `veloci agent check FILE…` exits 1 if any of the files is protected.
 
 ## Commands for checking your work
 
 ```sh
-velociredactor config validate          # errors → exit 2
-velociredactor list FILE [--json]       # findings, values hidden
-velociredactor redact --check FILE      # exit 1 if anything remains redacted
+veloci config validate          # errors → exit 2
+veloci list FILE [--json]       # findings, values hidden
+veloci redact --check FILE      # exit 1 if anything remains redacted
 ```

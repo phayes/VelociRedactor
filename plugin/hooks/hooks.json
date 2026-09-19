@@ -1,5 +1,5 @@
 {
-  "description": "Deny reading, or searching, files the project's velociredactor.yml protects when its agent section sets enforce: true, pointing the agent at velociredactor redact or grep instead.",
+  "description": "Deny reading, or searching, files the project's veloci.yml protects when its agent section sets enforce: true, pointing the agent at veloci redact or grep instead.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/velociredactor\" agent hook",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/veloci\" agent hook",
             "timeout": 10
           }
         ]

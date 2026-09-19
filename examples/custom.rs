@@ -1,4 +1,4 @@
-//! Extending velociredactor with a custom detector and a custom file format.
+//! Extending Veloci Redactor with a custom detector and a custom file format.
 //!
 //! Run with `cargo run --example custom`.
 
