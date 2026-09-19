@@ -4,12 +4,12 @@
 
 `velociredactor` redacts secrets and personal data from text and structured files while preserving their shape and formatting. Each distinct secret is replaced by a stable numbered token such as `REDACTION-1`.
 
-Velociredactor aims:
- - *Fast*, with parallel scanning and a very fast regex engine.
- - *Exaustive*, with built-in support for all [Betterleaks](https://betterleaks.com) secret patterns, and optional support for [OpenAI's Privacy Filter](https://openai.com/index/introducing-openai-privacy-filter/).
- - *Configurable* with extensive configuration options.
- - *Extensible* with a matching [rust crate](https://crates.io/crates/velociredactor) and traits. 
- - *AI Native* with built-in LLM skills so AI models can automatically start using `velociredactor` to avoid reading sensitive data into context.
+Veloci Redactor aims:
+ - ***Fast***, with parallel scanning and a very fast regex engine.
+ - ***Exaustive***, with built-in support for all [Betterleaks](https://betterleaks.com) secret patterns, and optional support for [OpenAI's Privacy Filter](https://openai.com/index/introducing-openai-privacy-filter/).
+ - ***Configurable*** with extensive configuration options.
+ - ***Extensible*** with a matching [rust crate](https://crates.io/crates/velociredactor) and traits. 
+ - ***AI Native*** with built-in LLM skills so AI models can automatically start using `velociredactor` to avoid reading sensitive data into context.
 
 This README is the command-line manual. For the Rust library, see the [`velociredactor` crate](https://crates.io/crates/velociredactor), its [API documentation](https://docs.rs/velociredactor), and the [crate guide](README.crate.md).
 
