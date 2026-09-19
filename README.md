@@ -2,7 +2,7 @@
 
 # Veloci Redactor
 
-Veloci Redactor `veloci` redacts secrets and personal data from text and structured files while preserving their shape and formatting. Each distinct secret is replaced by a stable numbered token such as `REDACTION-1`.
+Veloci Redactor (`veloci`) redacts secrets and personal data from text and structured files while preserving their shape and formatting. Each distinct secret is replaced by a stable numbered token such as `REDACTION-1`.
 
 Veloci Redactor aims:
  - ***Fast***, with parallel scanning and a very fast regex engine.
