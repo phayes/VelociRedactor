@@ -9,7 +9,10 @@
   "plugins": [
     {
       "name": "velociredactor",
-      "source": "./plugin",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/phayes/velociredactor/releases/latest/download/velociredactor-plugin.zip"
+      },
       "description": "Read sensitive files through velociredactor so secrets and personal data never reach the model."
     }
   ]

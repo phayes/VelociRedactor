@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Runs the velociredactor binary for this platform from libexec/. Release
+# packages ship one per target; a checkout without them falls back to a
+# velociredactor installed elsewhere on PATH.
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+case "$OS/$ARCH" in
+  Darwin/arm64)
+    BIN="$ROOT/libexec/velociredactor-aarch64-apple-darwin"
+    ;;
+  Darwin/x86_64)
+    BIN="$ROOT/libexec/velociredactor-x86_64-apple-darwin"
+    ;;
+  Linux/aarch64|Linux/arm64)
+    BIN="$ROOT/libexec/velociredactor-aarch64-unknown-linux-gnu"
+    ;;
+  Linux/x86_64)
+    BIN="$ROOT/libexec/velociredactor-x86_64-unknown-linux-gnu"
+    ;;
+  MINGW*/ARM64|MINGW*/aarch64|MSYS*/ARM64|MSYS*/aarch64|CYGWIN*/ARM64|CYGWIN*/aarch64)
+    BIN="$ROOT/libexec/velociredactor-aarch64-pc-windows-msvc.exe"
+    ;;
+  MINGW*/x86_64|MSYS*/x86_64|CYGWIN*/x86_64)
+    BIN="$ROOT/libexec/velociredactor-x86_64-pc-windows-msvc.exe"
+    ;;
+  *)
+    BIN=""
+    ;;
+esac
+
+if [[ -n "$BIN" && -x "$BIN" ]]; then
+  exec "$BIN" "$@"
+fi
+
+# No bundled binary: use another velociredactor on PATH, skipping this launcher.
+IFS=: read -r -a dirs <<< "${PATH:-}"
+for dir in "${dirs[@]}"; do
+  [[ -n "$dir" && -d "$dir" ]] || continue
+  [[ "$(cd "$dir" && pwd)" == "$SELF_DIR" ]] && continue
+  for candidate in "$dir/velociredactor" "$dir/velociredactor.exe"; do
+    if [[ -f "$candidate" && -x "$candidate" ]]; then
+      exec "$candidate" "$@"
+    fi
+  done
+done
+
+echo "velociredactor: no binary for $OS/$ARCH in $ROOT/libexec, and none on PATH." >&2
+echo "Install it with: cargo install velociredactor-cli" >&2
+exit 127

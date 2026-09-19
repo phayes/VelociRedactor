@@ -9,7 +9,7 @@ These skills make AI coding agents read and search sensitive files through `velo
 | [`velociredactor-config`](skills/velociredactor-config/SKILL.md) | Customizes detection: allow lists, custom patterns, PII, the Privacy Filter model, and the protected files. |
 | [`velociredactor-share`](skills/velociredactor-share/SKILL.md) | Redacts logs and other output before they go into issues, pull requests, chat or web tools. |
 
-Every skill needs the `velociredactor` binary on `PATH`:
+Every skill needs the `velociredactor` binary on `PATH`. The Claude Code plugin bundles it for macOS, Linux and Windows (x86_64 and arm64). Other agents need it installed:
 
 ```console
 cargo install velociredactor-cli
@@ -24,7 +24,7 @@ cargo install velociredactor-cli
 /plugin install velociredactor@velociredactor
 ```
 
-The plugin installs the four skills and a `PreToolUse` hook. The hook does nothing unless a project turns on `enforce` (see below).
+The plugin installs the four skills, a `PreToolUse` hook and the `velociredactor` binary. Each release attaches the plugin as `velociredactor-plugin.zip`, and the marketplace installs the latest one. The hook does nothing unless a project turns on `enforce` (see below).
 
 ### Other agents
 
@@ -88,4 +88,7 @@ Limits:
 ```console
 claude plugin validate .            # the marketplace, from the repository root
 claude plugin validate ./plugin     # the plugin
+claude --plugin-dir ./plugin        # try the checkout
 ```
+
+A checkout has no `libexec/`, so `bin/velociredactor` falls back to a `velociredactor` installed elsewhere on `PATH`. Tagged releases build a binary for each target into `libexec/`, stamp the tag's version into `plugin.json` and publish the zip (see `.github/workflows/rust.yml`).
