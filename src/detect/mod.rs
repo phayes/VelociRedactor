@@ -7,16 +7,15 @@
 //!
 //! Which detectors run, and what each one is told, is configuration: the
 //! `detectors` list of a [`Config`](crate::config::Config) is a list of
-//! [`DetectorConfig`], and each entry names one of the detectors below.
+//! [`DetectorEntry`], and each entry names one of the detectors below.
 
 use std::ops::Range;
 use std::path::Path;
 
-use serde::Deserialize;
-
 mod connstr;
 mod credential;
 mod entropy;
+mod entry;
 mod path;
 mod pii;
 mod placeholder;
@@ -31,6 +30,7 @@ pub use connstr::ConnectionStringDetector;
 pub(crate) use credential::normalize_key as credential_key_normalize;
 pub use credential::{CredentialAssignmentDetector, CredentialKeyDetector};
 pub use entropy::{EntropyConfig, EntropyDetector, shannon_entropy};
+pub use entry::DetectorEntry;
 pub use path::{PathConfig, PathDetector};
 pub use pii::{AddressDetector, EmailConfig, EmailDetector, PhoneDetector};
 pub use placeholder::{PlaceholderConfig, Placeholders, is_placeholder};
@@ -134,8 +134,7 @@ impl Detection {
     }
 }
 
-/// One entry of a configuration's `detectors` list: which detector to run,
-/// and what to tell it.
+/// Which detector a [`DetectorEntry`] runs, and what to tell it.
 ///
 /// In YAML a detector that takes settings is a single-key map and one that
 /// takes none is a bare name:
@@ -153,7 +152,7 @@ pub enum DetectorConfig {
     Entropy(EntropyConfig),
     /// [`RulesetDetector`]
     Ruleset(RulesetConfig),
-    /// A [`RegexDetector`] per pattern, all under one label.
+    /// A [`RegexDetector`] per pattern.
     Regex(RegexConfig),
     /// [`ValueDetector`]
     Value(ValueConfig),
@@ -205,103 +204,11 @@ pub const DETECTOR_NAMES: &[&str] = &[
     "privacy_filter",
 ];
 
-/// A detector entry is a bare name when it takes no settings, and a map of
-/// one name to its settings when it does.
-///
-/// Written by hand rather than derived because serde's own external tagging
-/// spells a variant as a YAML tag (`!entropy`), and because naming the
-/// detector in the error is worth far more here than the derive saves.
-impl<'de> Deserialize<'de> for DetectorConfig {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(DetectorVisitor)
-    }
-}
-
-struct DetectorVisitor;
-
-/// The detectors that take settings, and so cannot be written as a bare name.
-const CONFIGURED: [&str; 6] = ["entropy", "ruleset", "regex", "value", "path", "pii:email"];
-
-#[cfg(not(feature = "privacy-filter"))]
-const PRIVACY_FILTER_MISSING: &str = "the privacy_filter detector is not compiled into this build \
-     (it needs the `privacy-filter` feature)";
-
-fn unknown_detector<E: serde::de::Error>(name: &str) -> E {
-    E::custom(format!(
-        "unknown detector {name:?} (expected one of {})",
-        DETECTOR_NAMES.join(", ")
-    ))
-}
-
-impl<'de> serde::de::Visitor<'de> for DetectorVisitor {
-    type Value = DetectorConfig;
-
-    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a detector name, or a map of one detector name to its settings")
-    }
-
-    fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Self::Value, E> {
-        match name {
-            "credentialed_uri" => Ok(DetectorConfig::CredentialedUri),
-            "connection_string" => Ok(DetectorConfig::ConnectionString),
-            "credential_assignment" => Ok(DetectorConfig::CredentialAssignment),
-            "credential_key" => Ok(DetectorConfig::CredentialKey),
-            "pii:phone" => Ok(DetectorConfig::PiiPhone),
-            "pii:address" => Ok(DetectorConfig::PiiAddress),
-            #[cfg(feature = "privacy-filter")]
-            "privacy_filter" => Ok(DetectorConfig::PrivacyFilter(Box::default())),
-            #[cfg(not(feature = "privacy-filter"))]
-            "privacy_filter" => Err(E::custom(PRIVACY_FILTER_MISSING)),
-            name if CONFIGURED.contains(&name) => Err(E::custom(format!(
-                "the {name} detector needs settings: write `{name}:` and indent them under it"
-            ))),
-            other => Err(unknown_detector(other)),
-        }
-    }
-
-    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        use serde::de::Error;
-
-        let Some(name) = map.next_key::<String>()? else {
-            return Err(A::Error::custom("an empty map names no detector"));
-        };
-        let detector = match name.as_str() {
-            "entropy" => DetectorConfig::Entropy(map.next_value()?),
-            "ruleset" => DetectorConfig::Ruleset(map.next_value()?),
-            "regex" => DetectorConfig::Regex(map.next_value()?),
-            "value" => DetectorConfig::Value(map.next_value()?),
-            "path" => DetectorConfig::Path(map.next_value()?),
-            "pii:email" => DetectorConfig::PiiEmail(map.next_value()?),
-            #[cfg(feature = "privacy-filter")]
-            "privacy_filter" => DetectorConfig::PrivacyFilter(Box::new(
-                // Every setting has a default, so `- privacy_filter:` with
-                // nothing under it is complete.
-                map.next_value::<Option<_>>()?.unwrap_or_default(),
-            )),
-            #[cfg(not(feature = "privacy-filter"))]
-            "privacy_filter" => return Err(A::Error::custom(PRIVACY_FILTER_MISSING)),
-            // A detector that takes no settings, written `- name:` with
-            // nothing under it.
-            other => {
-                let detector = self.visit_str(other)?;
-                map.next_value::<serde::de::IgnoredAny>()?;
-                detector
-            }
-        };
-        if map.next_key::<String>()?.is_some() {
-            return Err(A::Error::custom(format!(
-                "{name}: each entry of `detectors` names one detector; \
-                 start the next one with its own `-`"
-            )));
-        }
-        Ok(detector)
-    }
-}
-
 impl DetectorConfig {
-    /// The name this entry is written under, which is also the name the
-    /// detectors it builds report themselves as.
-    pub fn name(&self) -> &'static str {
+    /// The name this detector is written under, which is also what the
+    /// detectors it builds report themselves as unless an entry's `label`
+    /// says otherwise.
+    pub fn id(&self) -> &'static str {
         match self {
             Self::Entropy(_) => "entropy",
             Self::Ruleset(_) => "ruleset",
@@ -320,7 +227,7 @@ impl DetectorConfig {
         }
     }
 
-    /// Build this entry's detectors.
+    /// Build this detector, reporting under its [`id`](Self::id).
     ///
     /// `placeholders` is the configuration's shared vocabulary of values that
     /// look like credentials but are not. Entries that do not consult it
@@ -361,7 +268,7 @@ impl DetectorConfig {
         })
     }
 
-    /// Resolve the file paths this entry names against `base`.
+    /// Resolve the file paths these settings name against `base`.
     pub fn resolve_paths(&mut self, base: &Path) {
         match self {
             Self::Ruleset(config) => {

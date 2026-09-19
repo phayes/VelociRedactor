@@ -109,8 +109,9 @@ enum AgentCommand {
     /// Print the configuration's `agent` section, or that it has none.
     ///
     /// Also lists the files whose contents hold secrets that no `agent`
-    /// section protects, as `veloci scan --unprotected` finds them,
-    /// but without the slow `privacy_filter` detector. Values are never
+    /// section protects, as `veloci scan --unprotected` finds them.
+    /// Detectors disabled in the configuration, such as a slow
+    /// `privacy_filter`, run only when named with `--detector`. Values are never
     /// shown, and protected files are not read. When the project has not
     /// chosen its protected files yet, also suggests file name patterns, and
     /// how to record a choice with `veloci agent init`.
@@ -156,11 +157,6 @@ struct AgentStatusArgs {
     /// Don't read file contents: suggest candidates by file name only.
     #[arg(long)]
     no_scan: bool,
-
-    /// Scan with the `privacy_filter` detector too, when the configuration
-    /// enables it. It is left out by default because it is slow.
-    #[arg(long, conflicts_with = "no_scan")]
-    privacy_filter: bool,
 }
 
 #[derive(Debug, Args)]
@@ -532,7 +528,7 @@ fn agent_status(args: &AgentStatusArgs) -> Result<ExitCode> {
     let secrets = if args.no_scan {
         Vec::new()
     } else {
-        find_secrets(&root, &args.config, !args.privacy_filter)?
+        find_secrets(&root, &args.config)?
     };
 
     if args.json {
@@ -609,10 +605,7 @@ fn agent_check(args: &AgentCheckArgs) -> Result<ExitCode> {
 fn agent_init(args: &AgentInitArgs) -> Result<ExitCode> {
     if args.protect.is_empty() {
         let root = project_root(args.config.resolved_path()?.as_deref())?;
-        let (candidates, secrets) = (
-            find_candidates(&root),
-            find_secrets(&root, &args.config, true)?,
-        );
+        let (candidates, secrets) = (find_candidates(&root), find_secrets(&root, &args.config)?);
         eprintln!("error: name the files to protect with --protect GLOB\n");
         eprint!("{}", not_configured_help(&candidates, &secrets));
         return Ok(ExitCode::from(2));
@@ -946,11 +939,11 @@ fn find_candidates(root: &Path) -> Vec<Candidate> {
 
 /// The unprotected files under `root` whose contents hold secrets, as
 /// `veloci scan --unprotected` finds them, with paths relative to
-/// `root`. `skip_model` leaves out the slow `privacy_filter` detector.
-fn find_secrets(root: &Path, config: &ConfigArg, skip_model: bool) -> Result<Vec<scan::Hit>> {
+/// `root`.
+fn find_secrets(root: &Path, config: &ConfigArg) -> Result<Vec<scan::Hit>> {
     let report = scan::scan(
         &[root.to_owned()],
-        &scan::Scan::project(root, skip_model),
+        &scan::Scan::project(root),
         config.clone(),
     )?;
     Ok(report.hits)
@@ -1046,8 +1039,12 @@ fn download_model(args: DownloadArgs) -> Result<ExitCode> {
     // so give an absolute one.
     let dir = fs::canonicalize(&dir).unwrap_or(dir);
     eprintln!("downloaded the model to {}", dir.display());
-    eprintln!("to use it, add this under `detectors` in your configuration:");
+    eprintln!(
+        "to use it, add this under `detectors` in your configuration, and pass \
+         `--detector privacy_filter` to run it (or remove `enabled: false`):"
+    );
     println!("  - privacy_filter:");
+    println!("      enabled: false");
     // Without --dir the model is where the detector looks when given no
     // directory, so the entry needs none.
     if args.dir.is_some() {

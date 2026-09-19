@@ -18,8 +18,8 @@ use serde_json::json;
 use velociredactor::FormatHint;
 
 use crate::util::{
-    CONFIG_ENV, ConfigArg, Fatal, RulesCache, SKIPPED_DIRS, WalkOptions, for_each_ordered,
-    is_broken_pipe, is_file, walk_builder,
+    CONFIG_ENV, ConfigArg, DetectorArg, Fatal, RulesCache, SKIPPED_DIRS, WalkOptions,
+    for_each_ordered, is_broken_pipe, is_file, walk_builder,
 };
 
 #[derive(Debug, Args)]
@@ -82,6 +82,9 @@ pub struct ScanArgs {
     /// file uses the configuration found from its own directory.
     #[arg(long, value_name = "FILE", env = CONFIG_ENV)]
     config: Option<PathBuf>,
+
+    #[command(flatten)]
+    enable: DetectorArg,
 }
 
 /// What to scan, beyond the paths.
@@ -93,8 +96,6 @@ pub struct Scan<'a> {
     pub max_files: Option<usize>,
     /// Report only files no `agent` section protects, which are not read.
     pub unprotected: bool,
-    /// Leave out the `privacy_filter` detector.
-    pub skip_model: bool,
     /// Keep the redacted values on each finding.
     pub show_value: bool,
     /// Paths are shown relative to this directory when under it.
@@ -105,7 +106,7 @@ impl Scan<'_> {
     /// Scanning a whole project the way `agent status` does: the files no
     /// `agent` section protects, but not dependencies, within limits that
     /// keep it quick.
-    pub fn project(root: &Path, skip_model: bool) -> Scan<'_> {
+    pub fn project(root: &Path) -> Scan<'_> {
         Scan {
             walk: WalkOptions {
                 globs: &[],
@@ -118,7 +119,6 @@ impl Scan<'_> {
             max_filesize: 1 << 20,
             max_files: Some(50_000),
             unprotected: true,
-            skip_model,
             show_value: false,
             relative_to: Some(root),
         }
@@ -189,7 +189,7 @@ enum Outcome {
 /// loaded or a walk cannot be set up; files that cannot be read are listed
 /// in the report.
 pub fn scan(roots: &[PathBuf], options: &Scan<'_>, config: ConfigArg) -> Result<Report> {
-    let rules = RulesCache::new(config).skip_model(options.skip_model);
+    let rules = RulesCache::new(config);
 
     // Build every walker first, so a bad `--glob` fails before anything is
     // scanned.
@@ -341,7 +341,6 @@ pub fn run(args: ScanArgs) -> Result<ExitCode> {
         max_filesize: args.max_filesize,
         max_files: None,
         unprotected: args.unprotected,
-        skip_model: false,
         show_value: args.show_value,
         relative_to: implicit_root.then_some(Path::new(".")),
     };
@@ -350,6 +349,7 @@ pub fn run(args: ScanArgs) -> Result<ExitCode> {
         &options,
         ConfigArg {
             config: args.config.clone(),
+            enable: args.enable.clone(),
         },
     )?;
 

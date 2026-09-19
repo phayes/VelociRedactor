@@ -28,7 +28,7 @@ Once the project is configured, `agent status` also lists **unprotected files wh
 
 Treat every file on that list as protected for the rest of the session: read it with `veloci redact`, and search it with `veloci grep`. Tell the user which files it found, and offer to add them to the `agent:` section so the choice sticks. The `velociredactor-setup` skill covers changing the section.
 
-The status list stops at 20 files, and it leaves out the slow `privacy_filter` detector even when the project enables it. For the full list, with every detector the project enables:
+The status list stops at 20 files. Like every command, it skips detectors the configuration marks `enabled: false` (typically the slow `privacy_filter`) unless named with `--detector`. For the full list:
 
 ```sh
 veloci scan --unprotected -l   # one path per line; exit 1 = some found

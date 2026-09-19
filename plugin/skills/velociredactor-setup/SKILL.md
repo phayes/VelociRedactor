@@ -26,7 +26,7 @@ veloci agent status
 - **By file name:** patterns such as `.env*` or `*.pem`, with example paths.
 - **By contents:** files that `veloci scan` found secrets in, with how many values each holds and which detectors found them. It never shows the values. It includes hidden and ignored files, which are often where the secrets are.
 
-`agent status` shows the first 20 files with secrets. It leaves out the slow `privacy_filter` detector, even when the project enables it; `--privacy-filter` puts it back. If the user doesn't want file contents read at all, use `agent status --no-scan`, which suggests file names only. For every file with secrets, with the line of each finding and every detector the project enables:
+`agent status` shows the first 20 files with secrets. Detectors the configuration marks `enabled: false`, such as a slow `privacy_filter`, run only when named with `--detector privacy_filter`. If the user doesn't want file contents read at all, use `agent status --no-scan`, which suggests file names only. For every file with secrets, with the line of each finding:
 
 ```sh
 veloci scan              # table: file, findings, detectors

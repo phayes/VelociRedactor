@@ -48,7 +48,7 @@ veloci config show > veloci.yml
 | The token written in place of a secret | `replacement` | `"[REDACTED-{n}]"` or `"[REDACTED-{n}:{reason}]"` |
 | Which files agents read redacted | `agent.protected`, `agent.exclude`, `agent.enforce` | `protected: [".env*", "secrets/"]` |
 
-Custom regex detector. Add it under `detectors:`. The `label` appears in `veloci list` output:
+Custom regex detector. Add it under `detectors:`. The `label` appears in `veloci list` output (any entry can take a `label`; without one it reports as its detector name):
 
 ```yaml
   - regex:
@@ -59,13 +59,15 @@ Custom regex detector. Add it under `detectors:`. The `label` appears in `veloci
 
 Patterns use Rust `regex` syntax and are not anchored. List a `regex` detector as many times as you need.
 
-`detectors` is an ordered list, and a detector that isn't listed doesn't run. Deleting an entry turns it off.
+`detectors` is an ordered list, and a detector that isn't listed doesn't run. Deleting an entry turns it off; `enabled: false` keeps it but runs it only when a command is given `--detector <label or name>`.
 
 Privacy Filter model: it's slow, uses up to 16 GB of memory, and is a 2.6 GB download. Confirm with the user before turning it on.
 
 ```sh
 veloci privacy_filter download   # prints the entry to paste under detectors
 ```
+
+The printed entry has `enabled: false`, so it runs only with `--detector privacy_filter`. Remove that line only if the user wants it in every run, including whole-project scans.
 
 Full reference: [references/config-reference.md](references/config-reference.md). The file printed by `veloci config show` is itself documented, so read the comments near what you're changing.
 

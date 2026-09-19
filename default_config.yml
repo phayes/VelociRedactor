@@ -16,8 +16,9 @@ comments: false
 #
 # A format string. `{n}` is the 1-based number of this distinct value in the
 # document; the same text always shares a number. `{reason}` is why it was
-# redacted: the detector label (`entropy`, `ruleset:github-pat`,
-# `credential_key`, …). Double a brace to write it literally (`{{` / `}}`).
+# redacted: the detector's label (`entropy`, `ruleset:github-pat`,
+# `credential_key`, …; see `label` under `detectors`). Double a brace to write
+# it literally (`{{` / `}}`).
 #
 # The format must contain exactly one `{n}`, at most one `{reason}`, literal
 # text at both ends, and literal text between placeholders. Reasons contain
@@ -136,8 +137,17 @@ placeholder:
 #
 # Every detector that runs is listed here with its own settings; a detector
 # that is not listed does not run. Detectors that take no settings are written
-# as a bare name. The name of each is what `veloci list` reports in its
-# DETECTOR column.
+# as a bare name.
+#
+# Any entry also takes these two settings, among its own or, for a detector
+# with none, as `- credential_key: { enabled: false }`:
+#
+#   enabled   `false` keeps the entry but does not run it, unless named on the
+#             command line with `--detector <label or name>`. Default `true`.
+#   label     What its findings are reported as: in `veloci list`'s DETECTOR
+#             column and as `{reason}`. Default: the detector's name. A
+#             detector that reports more (`ruleset:github-pat`) keeps the rest
+#             (`mine:github-pat`). Same characters as a reason.
 # ---------------------------------------------------------------------------
 detectors:
   # Long tokens that look random.
@@ -198,10 +208,9 @@ detectors:
       # ["github-pat", "aws-*"].
       exclude_rules: []
 
-  # Every match of a regular expression, reported under `label`. List `regex`
-  # as many times as you like: each entry's patterns share its label, which is
-  # how a listing keeps unrelated groups apart. `label` may be left out, and
-  # is then `regex`.
+  # Every match of a regular expression. List `regex` as many times as you
+  # like: give each entry its own `label` to keep unrelated groups of patterns
+  # apart in a listing. Without one, findings are reported as `regex`.
   #
   # These patterns identify credentials by prefix and length alone, so they
   # are caught whatever their entropy or surrounding key. They are not
@@ -259,10 +268,15 @@ detectors:
   ##
   ##     veloci privacy_filter download
   ##
+  ## `enabled: false` keeps it for when it is asked for, with
+  ## `--detector privacy_filter`, rather than in every scan of a whole project.
+  ##
   ## Every setting below is optional and shown with its default, except
-  ## `model_dir`; `- privacy_filter` alone is a complete entry.
+  ## `model_dir` and `enabled`; `- privacy_filter` alone is a complete entry.
   #
   # - privacy_filter:
+  #     enabled: false
+  #
   #     # The downloaded model, relative to this file. When left out, the
   #     # copy in the Hugging Face cache, which is where the download command
   #     # puts it unless given --dir: $HF_HUB_CACHE, else $HF_HOME/hub, else

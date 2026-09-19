@@ -16,7 +16,7 @@ use ignore::{DirEntry, WalkBuilder};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use velociredactor::agent::AgentPolicy;
 use velociredactor::config::Config;
-use velociredactor::detect::DetectorConfig;
+use velociredactor::detect::DETECTOR_NAMES;
 use velociredactor::files::{FileGlobs, FileKeyPaths};
 use velociredactor::{Allow, Redactor};
 
@@ -52,6 +52,41 @@ pub struct ConfigArg {
     /// current directory and its parents.
     #[arg(short, long, value_name = "FILE", env = CONFIG_ENV)]
     pub config: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub enable: DetectorArg,
+}
+
+/// Detectors the configuration disables, turned on for this run.
+#[derive(Debug, Clone, Default, Args)]
+pub struct DetectorArg {
+    /// Run a detector the configuration lists with `enabled: false`, named by
+    /// its label or by detector (`privacy_filter`). Repeatable.
+    #[arg(long = "detector", value_name = "NAME")]
+    pub detectors: Vec<String>,
+}
+
+impl DetectorArg {
+    /// Turn on the detectors named in `config`. A name that is neither a
+    /// label nor a detector in it is an error; a detector it does not list
+    /// is a warning, since each file may find a different configuration.
+    pub fn apply(&self, config: &mut Config) -> Result<()> {
+        for name in config.enable_detectors(&self.detectors) {
+            if DETECTOR_NAMES.contains(&name) {
+                eprintln!(
+                    "warning: --detector {name}: the configuration does not list it, \
+                     so it does not run"
+                );
+            } else {
+                anyhow::bail!(
+                    "--detector {name}: no detector in the configuration is labelled {name:?}, \
+                     and no detector is called that (expected a label or one of {})",
+                    DETECTOR_NAMES.join(", ")
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ConfigArg {
@@ -94,12 +129,15 @@ impl ConfigArg {
     }
 
     /// The rules to apply, in order: `--config`, `$VELOCIREDACTOR_CONFIG`,
-    /// a discovered file, or the built-in configuration.
+    /// a discovered file, or the built-in configuration; with the detectors
+    /// `--detector` names turned on.
     pub fn load(&self) -> Result<Config> {
-        match self.resolved_path()? {
-            Some(path) => Ok(Config::from_path(path)?),
-            None => Ok(Config::builtin().clone()),
-        }
+        let mut config = match self.resolved_path()? {
+            Some(path) => Config::from_path(path)?,
+            None => Config::builtin().clone(),
+        };
+        self.enable.apply(&mut config)?;
+        Ok(config)
     }
 }
 
@@ -286,18 +324,14 @@ pub fn allowed_file_paths(config: &Config, path: Option<&Path>) -> Result<FileKe
 }
 
 /// The rules of the configuration at `path`, or of the built-in
-/// configuration, without the `privacy_filter` detector when `skip_model`.
-fn load_rules(path: Option<&Path>, skip_model: bool) -> Result<Rules> {
+/// configuration, with the detectors `enable` names turned on.
+fn load_rules(path: Option<&Path>, enable: &DetectorArg) -> Result<Rules> {
     let load = || -> Result<Rules> {
         let mut config = match path {
             Some(path) => Config::from_path(path)?,
             None => Config::builtin().clone(),
         };
-        if skip_model {
-            config
-                .detectors
-                .retain(|detector| !matches!(detector, DetectorConfig::PrivacyFilter(_)));
-        }
+        enable.apply(&mut config)?;
         let agent = match path {
             // The built-in configuration never chooses agent files.
             Some(path) => anchored_policy(&config, path)?,
@@ -324,9 +358,6 @@ type LoadedRules = Arc<OnceLock<Result<Arc<Rules>, String>>>;
 /// between threads. Each configuration is loaded once, when first needed.
 pub struct RulesCache {
     config: ConfigArg,
-    /// Whether to leave out the `privacy_filter` detector, which is too slow
-    /// for a quick look at a whole project.
-    skip_model: bool,
     discoveries: Mutex<Discoveries>,
     /// By configuration file, `None` for the built-in one.
     rules: Mutex<HashMap<Option<PathBuf>, LoadedRules>>,
@@ -336,16 +367,9 @@ impl RulesCache {
     pub fn new(config: ConfigArg) -> Self {
         RulesCache {
             config,
-            skip_model: false,
             discoveries: Mutex::new(Discoveries::new()),
             rules: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// Leave out the `privacy_filter` detector when `skip` is true.
-    pub fn skip_model(mut self, skip: bool) -> Self {
-        self.skip_model = skip;
-        self
     }
 
     /// The rules for a file in `directory`, which should be absolute, or for
@@ -365,7 +389,7 @@ impl RulesCache {
         drop(rules);
         // Other threads wanting the same rules wait here while they load.
         let loaded = loaded.get_or_init(|| {
-            load_rules(path.as_deref(), self.skip_model)
+            load_rules(path.as_deref(), &self.config.enable)
                 .map(Arc::new)
                 .map_err(|err| format!("{err:#}"))
         });

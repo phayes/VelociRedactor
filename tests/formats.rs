@@ -1,5 +1,21 @@
 //! Each format redacts only values, keeps everything else byte-for-byte, and
 //! produces output its own parser still accepts.
+// Each test needs its format; a build without all of them leaves helpers unused.
+#![cfg_attr(
+    not(all(
+        feature = "json",
+        feature = "yaml",
+        feature = "toml",
+        feature = "xml",
+        feature = "hcl",
+        feature = "ini",
+        feature = "dotenv",
+        feature = "properties",
+        feature = "csv",
+        feature = "plist"
+    )),
+    allow(unused)
+)]
 
 mod common;
 
@@ -21,6 +37,7 @@ fn unchanged_without_secrets(format: &str, input: &str) {
     );
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn yaml() {
     let input = format!(
@@ -103,6 +120,7 @@ second: "[REDACTED-1]"
     unchanged_without_secrets("yaml", "a: 1\nb: [x, y]\nc: {d: e}\n");
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn yaml_escaped_scalar_is_requoted() {
     let input = format!("key: \"\\x41{}\"\n", &S[1..]);
@@ -110,6 +128,7 @@ fn yaml_escaped_scalar_is_requoted() {
     assert_eq!(got, "key: \"[REDACTED-1]\"\n");
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn yaml_multiline_secret_in_block_scalar_is_rewritten_as_block() {
     let key = fake_openssh_private_key();
@@ -119,6 +138,7 @@ fn yaml_multiline_secret_in_block_scalar_is_rewritten_as_block() {
     assert_eq!(got, "key: |\n  [REDACTED-1]\nnext: ok\n");
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn yaml_non_ascii_offsets() {
     let input = format!("naïve: \"café {S}\"\nnext: é\n");
@@ -128,6 +148,7 @@ fn yaml_non_ascii_offsets() {
     );
 }
 
+#[cfg(feature = "toml")]
 #[test]
 fn toml() {
     let input = format!(
@@ -175,12 +196,14 @@ url = "[REDACTED-3]"
     unchanged_without_secrets("toml", "a = 1\n[b]\nc = \"d\"\n");
 }
 
+#[cfg(feature = "toml")]
 #[test]
 fn toml_escaped_value_is_requoted() {
     let input = format!("key = \"\\u0073{}\"\n", &S[1..]);
     assert_eq!(as_format("toml", &input), "key = \"[REDACTED-1]\"\n");
 }
 
+#[cfg(feature = "xml")]
 #[test]
 fn xml() {
     let input = format!(
@@ -215,6 +238,7 @@ fn xml() {
     unchanged_without_secrets("xml", "<a b=\"c\">d &lt; e</a>");
 }
 
+#[cfg(feature = "xml")]
 #[test]
 fn xml_plist_keys() {
     let input = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -241,6 +265,7 @@ fn xml_plist_keys() {
     );
 }
 
+#[cfg(feature = "xml")]
 #[test]
 fn xml_is_auto_detected_by_declaration() {
     let input = format!("<?xml version=\"1.0\"?><a>{S}</a>");
@@ -250,6 +275,7 @@ fn xml_is_auto_detected_by_declaration() {
     assert_eq!(redaction.format(), "xml");
 }
 
+#[cfg(feature = "hcl")]
 #[test]
 fn hcl() {
     let input = format!(
@@ -286,6 +312,7 @@ EOT
     unchanged_without_secrets("hcl", "a = \"b\"\nblock \"x\" {\n  c = [1, 2]\n}\n");
 }
 
+#[cfg(feature = "hcl")]
 #[test]
 fn hcl_credential_context() {
     let input = "db {\n  host = \"h\"\n  user = \"u\"\n  password = \"correct-horse\"\n}\n";
@@ -295,6 +322,7 @@ fn hcl_credential_context() {
     );
 }
 
+#[cfg(feature = "ini")]
 #[test]
 fn ini() {
     let input = format!(
@@ -305,6 +333,7 @@ fn ini() {
     unchanged_without_secrets("ini", "[a]\nb = c\n");
 }
 
+#[cfg(feature = "dotenv")]
 #[test]
 fn dotenv() {
     let input = format!(
@@ -314,6 +343,7 @@ fn dotenv() {
     check("dotenv", &input, want);
 }
 
+#[cfg(feature = "dotenv")]
 #[test]
 fn dotenv_hex_digest_on_api_key() {
     let hex = "b65cc3551e470d5abe2448d41429daa2";
@@ -325,6 +355,7 @@ fn dotenv_hex_digest_on_api_key() {
     check("dotenv", &format!("NOTE={hex}\n"), &format!("NOTE={hex}\n"));
 }
 
+#[cfg(feature = "dotenv")]
 #[test]
 fn dotenv_file_names() {
     let formats = redactor().formats();
@@ -340,6 +371,7 @@ fn dotenv_file_names() {
     }
 }
 
+#[cfg(feature = "properties")]
 #[test]
 fn properties() {
     let input = format!(
@@ -349,6 +381,7 @@ fn properties() {
     check("properties", &input, want);
 }
 
+#[cfg(feature = "csv")]
 #[test]
 fn csv() {
     let input = format!(
@@ -358,18 +391,21 @@ fn csv() {
     check("csv", &input, want);
 }
 
+#[cfg(feature = "csv")]
 #[test]
 fn csv_crlf() {
     let input = format!("a,b\r\n1,{S}\r\n2,x\r\n");
     check("csv", &input, "a,b\r\n1,[REDACTED-1]\r\n2,x\r\n");
 }
 
+#[cfg(feature = "csv")]
 #[test]
 fn tsv() {
     let input = format!("k\tv\ntoken\t{S}\n");
     check("tsv", &input, "k\tv\ntoken\t[REDACTED-1]\n");
 }
 
+#[cfg(feature = "plist")]
 #[test]
 fn binary_plist() {
     let mut dict = plist::Dictionary::new();
@@ -396,6 +432,16 @@ fn binary_plist() {
     assert_eq!(redaction.render(&Allow::values([secret])).unwrap(), input);
 }
 
+#[cfg(all(
+    feature = "json",
+    feature = "yaml",
+    feature = "toml",
+    feature = "xml",
+    feature = "hcl",
+    feature = "ini",
+    feature = "properties",
+    feature = "csv"
+))]
 #[test]
 fn format_selection_by_path() {
     let formats = redactor().formats();
@@ -424,6 +470,7 @@ fn format_selection_by_path() {
     assert!(formats.for_path("README".as_ref()).is_none());
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn traversal_order_is_stable() {
     // Rendering twice with different allow lists must address the same

@@ -1989,13 +1989,16 @@ fn protected_files_are_not_read() {
     assert!(stderr(&out).contains(".env"), "{}", stderr(&out));
 }
 
+/// A detector disabled in the configuration is never built, so a
+/// privacy_filter whose model isn't downloaded is no problem until
+/// `--detector` turns it on.
 #[test]
-fn agent_status_leaves_out_the_privacy_filter_model() {
+fn a_disabled_detector_runs_only_when_named() {
     let dir = scan_repo();
     // A model that isn't there fails whenever the detector is built.
     let config = detector_config(
         dir.path(),
-        "  - privacy_filter:\n      model_dir: /nonexistent/velociredactor-model\n",
+        "  - privacy_filter:\n      enabled: false\n      model_dir: /nonexistent/velociredactor-model\n",
     );
     let mut source = fs::read_to_string(&config).unwrap();
     source.push_str("\nagent:\n  protected: [\".env\"]\n");
@@ -2005,16 +2008,21 @@ fn agent_status_leaves_out_the_privacy_filter_model() {
     assert!(out.status.success(), "{}", stderr(&out));
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(status["secrets"][0]["path"], "config/settings.yml");
+    assert_eq!(scan_in(dir.path(), &[]).status.code(), Some(1));
 
+    let named = ["--detector", "privacy_filter"];
     let out = velociredactor_in(
         dir.path(),
         dir.path(),
-        &["agent", "status", "--privacy-filter"],
+        &["agent", "status", named[0], named[1]],
         "",
     );
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(stderr(&out).contains("veloci.yml"), "{}", stderr(&out));
+    assert_eq!(scan_in(dir.path(), &named).status.code(), Some(2));
 
-    // An explicit scan runs every detector the configuration enables.
-    assert_eq!(scan_in(dir.path(), &[]).status.code(), Some(2));
+    // A name that is neither a label nor a detector is a mistake.
+    let out = scan_in(dir.path(), &["--detector", "privacy_filtr"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("privacy_filtr"), "{}", stderr(&out));
 }

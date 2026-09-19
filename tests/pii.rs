@@ -1,11 +1,13 @@
 mod common;
 
 use common::*;
+#[cfg(feature = "json")]
+use velociredactor::Allow;
 use velociredactor::detect::{
     AddressDetector, Detector, EmailConfig, EmailDetector, LeafContext, PhoneDetector,
     RegexDetector,
 };
-use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder};
+use velociredactor::{FormatHint, Redactor, RedactorBuilder};
 
 fn matches(detector: &dyn Detector, s: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -226,6 +228,7 @@ fn file_paths_survive_with_pii_enabled() {
     }
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn skipped_json_fields_are_not_scanned_for_pii() {
     let redactor = pii_redactor([email()]);

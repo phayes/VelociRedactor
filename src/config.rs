@@ -40,7 +40,7 @@ use std::sync::LazyLock;
 use serde::Deserialize;
 
 use crate::agent::AgentConfig;
-use crate::detect::{DetectorConfig, PlaceholderConfig, Placeholders};
+use crate::detect::{DetectorEntry, PlaceholderConfig, Placeholders};
 use crate::files::{FileGlobs, FileKeyPaths};
 use crate::format::{self, FormatRegistry};
 use crate::policy::{ConfigPolicy, PolicyConfig};
@@ -69,8 +69,9 @@ pub struct Config {
     pub policy: PolicyConfig,
     /// Values that look like credentials but are not.
     pub placeholder: PlaceholderConfig,
-    /// What looks for secrets, in the order listed.
-    pub detectors: Vec<DetectorConfig>,
+    /// What looks for secrets, in the order listed. Only the enabled
+    /// entries run; see [`Config::enable_detectors`].
+    pub detectors: Vec<DetectorEntry>,
     /// What to leave unredacted. The last word over every detector.
     #[serde(default)]
     pub allow: AllowRules,
@@ -152,6 +153,23 @@ impl Config {
         }
     }
 
+    /// Turn on every disabled detector entry `names` picks out, by label or
+    /// by detector id. Returns the names that picked out no entry at all.
+    pub fn enable_detectors<'n>(&mut self, names: &'n [String]) -> Vec<&'n str> {
+        let mut unmatched = Vec::new();
+        for name in names {
+            let mut matched = false;
+            for entry in self.detectors.iter_mut().filter(|e| e.matches(name)) {
+                entry.enabled = true;
+                matched = true;
+            }
+            if !matched {
+                unmatched.push(name.as_str());
+            }
+        }
+        unmatched
+    }
+
     /// The files this configuration never redacts, with `allow.files`
     /// relative to `base`: the directory holding the configuration.
     pub fn allowed_files(&self, base: impl Into<PathBuf>) -> FileGlobs {
@@ -211,8 +229,10 @@ impl Config {
             }
         }
 
+        // A disabled entry is not built: the privacy_filter model, say, may
+        // well not be downloaded, which is why it was disabled.
         if let Some(placeholders) = &placeholders {
-            for detector in &self.detectors {
+            for detector in self.detectors.iter().filter(|e| e.enabled) {
                 if let Err(error) = detector.detectors(placeholders) {
                     errors.push(error.to_string());
                 }
@@ -271,7 +291,7 @@ impl Config {
             }
         }
 
-        for detector in &self.detectors {
+        for detector in self.detectors.iter().filter(|e| e.enabled) {
             for detector in detector.detectors(&placeholders)? {
                 builder = builder.boxed_detector(detector);
             }
@@ -283,8 +303,11 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "json")]
     use crate::FormatHint;
-    use crate::detect::{PathConfig, RegexConfig};
+    #[cfg(feature = "json")]
+    use crate::detect::PathConfig;
+    use crate::detect::{DetectorConfig, RegexConfig};
 
     #[cfg(feature = "json")]
     fn redact(config: &Config, input: &str) -> String {
@@ -315,7 +338,7 @@ mod tests {
         let names: Vec<_> = Config::builtin()
             .detectors
             .iter()
-            .map(DetectorConfig::name)
+            .map(|entry| entry.config.id())
             .collect();
         assert_eq!(
             names,
@@ -369,7 +392,7 @@ mod tests {
     fn the_builtin_configuration_redacts_like_the_default_redactor() {
         let input = r#"{"api_key":"sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA","id":"x"}"#;
         let (redactor, warnings) = Config::builtin().redactor().unwrap();
-        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(warnings, missing_format_warnings());
 
         let with_config = redactor
             .redact(input.as_bytes(), FormatHint::Name("json"))
@@ -389,13 +412,18 @@ mod tests {
     fn rules_apply_on_top_of_the_configured_detectors() {
         let mut config = Config::builtin().clone();
         config.allow.paths = vec!["build.**".into()];
-        config.detectors.push(DetectorConfig::Path(PathConfig {
-            paths: vec!["**.customer".into()],
-        }));
-        config.detectors.push(DetectorConfig::Regex(RegexConfig {
-            patterns: vec!["ACME-[0-9]{4}".into()],
-            ..RegexConfig::default()
-        }));
+        config.detectors.push(
+            DetectorConfig::Path(PathConfig {
+                paths: vec!["**.customer".into()],
+            })
+            .into(),
+        );
+        config.detectors.push(
+            DetectorConfig::Regex(RegexConfig {
+                patterns: vec!["ACME-[0-9]{4}".into()],
+            })
+            .into(),
+        );
 
         let out = redact(
             &config,
@@ -455,10 +483,8 @@ mod tests {
         assert_eq!(agent.exclude, [".env.example"]);
         assert!(!agent.enforce);
         let (errors, warnings) = config.validate();
-        assert!(
-            errors.is_empty() && warnings.is_empty(),
-            "{errors:?} {warnings:?}"
-        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(warnings, missing_format_warnings(), "none of its own");
     }
 
     #[test]
@@ -510,7 +536,9 @@ mod tests {
             .map(|l| l.replacen("  # ", "  ", 1) + "\n")
             .collect();
         let config = Config::from_yaml(&edited("  - credential_key\n", &entry)).unwrap();
-        let Some(DetectorConfig::PrivacyFilter(documented)) = config.detectors.last() else {
+        let Some(DetectorConfig::PrivacyFilter(documented)) =
+            config.detectors.last().map(|e| &e.config)
+        else {
             panic!("expected a privacy_filter entry in:\n{entry}");
         };
         let default = PrivacyFilterConfig::default();
@@ -528,9 +556,36 @@ mod tests {
         let config =
             Config::from_yaml(&edited("  - credential_key\n", "  - privacy_filter\n")).unwrap();
         assert!(matches!(
-            config.detectors.last(),
+            config.detectors.last().map(|e| &e.config),
             Some(DetectorConfig::PrivacyFilter(c)) if c.model_dir.is_none()
         ));
+    }
+
+    /// A disabled entry is read but never built, so a disabled
+    /// privacy_filter whose model is not downloaded is no problem until it
+    /// is turned on.
+    #[cfg(feature = "privacy-filter")]
+    #[test]
+    fn a_disabled_detector_is_not_built_until_enabled() {
+        let mut config = Config::from_yaml(&edited(
+            "  - credential_key\n",
+            "  - privacy_filter:\n      enabled: false\n      model_dir: /nonexistent\n",
+        ))
+        .unwrap();
+        let (errors, _) = config.validate();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(config.redactor().is_ok());
+
+        assert!(
+            config
+                .enable_detectors(&["privacy_filter".into()])
+                .is_empty()
+        );
+        let (errors, _) = config.validate();
+        assert!(
+            errors.iter().any(|e| e.contains("privacy_filter")),
+            "{errors:?}"
+        );
     }
 
     #[cfg(not(feature = "privacy-filter"))]
@@ -561,20 +616,19 @@ mod tests {
     fn validate_accepts_the_builtin_configuration() {
         let (errors, warnings) = Config::builtin().validate();
         assert!(errors.is_empty(), "{errors:?}");
-        #[cfg(feature = "csv")]
-        assert!(warnings.is_empty(), "{warnings:?}");
-        #[cfg(not(feature = "csv"))]
-        assert!(warnings.iter().any(|w| w.contains("csv")), "{warnings:?}");
+        assert_eq!(warnings, missing_format_warnings());
     }
 
     #[test]
     fn validate_reports_independent_problems_together() {
         let mut config = Config::builtin().clone();
         config.formats.push("jsn".into());
-        config.detectors.push(DetectorConfig::Regex(RegexConfig {
-            patterns: vec!["unclosed(".into()],
-            ..RegexConfig::default()
-        }));
+        config.detectors.push(
+            DetectorConfig::Regex(RegexConfig {
+                patterns: vec!["unclosed(".into()],
+            })
+            .into(),
+        );
         config.allow.regexes.push("unclosed(".into());
         config.allow.within.push("unclosed(".into());
 
@@ -603,6 +657,18 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("nope"), "{err}");
+    }
+
+    /// What the built-in configuration warns about in this build: each format
+    /// it lists that the build was made without.
+    fn missing_format_warnings() -> Vec<String> {
+        let available = FormatRegistry::default();
+        Config::builtin()
+            .formats
+            .iter()
+            .filter(|name| available.get(name).is_none())
+            .map(|name| format!("format {name:?} is not compiled into this build; skipping it"))
+            .collect()
     }
 
     /// The built-in configuration with one line swapped for another.

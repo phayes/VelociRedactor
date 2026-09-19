@@ -46,13 +46,15 @@ Placeholders are consulted by `ruleset`, `credentialed_uri`, `connection_string`
 
 ## detectors
 
-Detectors run in the order listed, and a detector that isn't listed doesn't run. `veloci list` reports each finding under its detector's name.
+Detectors run in the order listed, and a detector that isn't listed doesn't run. `veloci list` reports each finding under its entry's label.
+
+Every entry also accepts `enabled` (default `true`; `false` runs it only when a command is given `--detector <label or name>`) and `label` (default the detector's name; a detector reporting `ruleset:<id>` keeps the `:<id>`). A detector with no settings of its own takes them as `- credential_key: { enabled: false }`.
 
 | Detector | Settings | Finds |
 |---|---|---|
 | `entropy` | `threshold` (4.5), `sensitive_threshold` (3.5), `min_token_length` (10), `sensitive_segments`, `structural_keys`, `hex_digest_lengths` | Random-looking tokens. A lower threshold redacts more. |
 | `ruleset` | `rules` (`builtin:betterleaks` and/or TOML paths), `allow_signatures`, `exclude_rules` (globs) | Several hundred vendor-specific secret formats, reported as `ruleset:<id>`. |
-| `regex` | `label`, `patterns` | Your own patterns. Can be listed any number of times. |
+| `regex` | `patterns` | Your own patterns. Can be listed any number of times, each with its own `label`. |
 | `credentialed_uri` | none | URLs with a password, such as `postgres://u:p@h/db`. |
 | `connection_string` | none | JDBC URLs, libpq DSNs and ADO.NET connection strings. |
 | `credential_assignment` | none | `DB_PASSWORD=value` inside free text. |

@@ -164,13 +164,15 @@ See [default_config.yml](https://github.com/phayes/velociredactor/blob/master/de
 
 ## Privacy Filter model
 
-The optional `privacy_filter` detector uses the [OpenAI Privacy Filter transformer model](https://openai.com/index/introducing-openai-privacy-filter/). It is slower and substantially heavier than the built-in pattern detectors, so it is disabled by default.
+The optional `privacy_filter` detector uses the [OpenAI Privacy Filter transformer model](https://openai.com/index/introducing-openai-privacy-filter/). It is slower and substantially heavier than the built-in pattern detectors, so it is not in the default configuration.
 
-Download the model to the Hugging Face cache and print the configuration entry that enables it:
+Download the model to the Hugging Face cache and print a configuration entry for it:
 
 ```console
 veloci privacy_filter download
 ```
+
+The printed entry has `enabled: false`, so it runs only when asked for, with `--detector privacy_filter` on any command. Any detector entry can be disabled this way, and named by its `label` or detector name.
 
 Use `--dir DIR` for another location, `--repo OWNER/NAME` for another model repository, or `--revision REV` for a particular revision. The CLI crate's `cuda` feature enables NVIDIA GPU execution, and `openblas` enables system OpenBLAS acceleration on Linux. (TODO: TURN ALL THIS THIS ON BY DEFAULT FOR COMPATIBLE PLATFORMS)
 
@@ -195,7 +197,7 @@ veloci agent status
 veloci agent check .env
 ```
 
-Patterns follow `.gitignore` conventions, relative to the configuration file. `agent check` exits 1 when any file it is given is protected. `agent status` also lists the files whose contents hold secrets that no `agent` section protects, as `scan --unprotected` finds them. Protected files are not read. Until the project has chosen, it suggests file name patterns as well. It leaves out the slow `privacy_filter` detector unless given `--privacy-filter`, and `--no-scan` makes it read no contents at all, suggesting by file name only.
+Patterns follow `.gitignore` conventions, relative to the configuration file. `agent check` exits 1 when any file it is given is protected. `agent status` also lists the files whose contents hold secrets that no `agent` section protects, as `scan --unprotected` finds them. Protected files are not read. Until the project has chosen, it suggests file name patterns as well. Detectors the configuration disables, such as a slow `privacy_filter`, run only when named with `--detector`, and `--no-scan` makes it read no contents at all, suggesting by file name only.
 
 With `enforce`, the plugin's hook blocks the agent's own Read and Grep tools on protected files, and on searches of directories holding them. The agent is pointed at `veloci redact` or `veloci grep` instead. Without `enforce`, the skills only instruct the agent.
 
@@ -204,6 +206,7 @@ With `enforce`, the plugin's hook blocks the agent's own Read and Grep tools on 
 ```text
 veloci redact [OPTIONS] [FILE]
     -c, --config FILE   Configuration file
+        --detector NAME  Also run this disabled detector (repeatable)
     -f, --format NAME  Select the input format
         --raw          Treat input as plain text
     -o, --output FILE  Write to a file
@@ -212,6 +215,7 @@ veloci redact [OPTIONS] [FILE]
 
 veloci list [OPTIONS] [FILE]
     -c, --config FILE   Configuration file
+        --detector NAME  Also run this disabled detector (repeatable)
     -f, --format NAME  Select the input format
         --raw          Treat input as plain text
         --json         Emit JSON
@@ -220,6 +224,7 @@ veloci list [OPTIONS] [FILE]
 
 veloci grep [OPTIONS] PATTERN [PATH...]
         --config FILE    Configuration file (default: found per file)
+        --detector NAME  Also run this disabled detector (repeatable)
     -e, --regexp PAT     Pattern; repeat for several (paths follow)
     -F, --fixed-strings  Literal patterns
     -i, --ignore-case    Case-insensitive
@@ -247,6 +252,7 @@ veloci grep [OPTIONS] PATTERN [PATH...]
 
 veloci scan [OPTIONS] [PATH...]
         --config FILE      Configuration file (default: found per file)
+        --detector NAME    Also run this disabled detector (repeatable)
         --unprotected      Only files no agent section protects (not read)
     -l, --files-with-matches  Print only paths
         --json             Emit JSON
@@ -265,7 +271,7 @@ veloci config location [--config FILE]
 veloci config validate [--config FILE]
 veloci privacy_filter download [--dir DIR] [--repo OWNER/NAME]
                                          [--revision REV]
-veloci agent status [--json] [--no-scan] [--privacy-filter] [--config FILE]
+veloci agent status [--json] [--no-scan] [--detector NAME] [--config FILE]
 veloci agent check FILE... [--config FILE]
 veloci agent init --protect GLOB... [--exclude GLOB...] [--enforce]
 veloci agent skill [NAME]      Print an agent skill, or list them

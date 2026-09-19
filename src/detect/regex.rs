@@ -6,8 +6,9 @@ use crate::Error;
 
 /// The `regex` detector's settings.
 ///
-/// One entry compiles one detector per pattern, all reporting the same label,
-/// so a configuration can keep unrelated groups of patterns apart:
+/// One entry compiles one detector per pattern. List `regex` as many times as
+/// you like, each with its own entry `label`, to keep unrelated groups of
+/// patterns apart:
 ///
 /// ```yaml
 /// - regex:
@@ -15,35 +16,19 @@ use crate::Error;
 ///     patterns:
 ///       - 'sb_secret_[A-Za-z0-9_-]{20,}'
 /// ```
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegexConfig {
-    /// What these patterns' findings are reported as.
-    #[serde(default = "default_label")]
-    pub label: String,
     /// Rust `regex` syntax. Every match of every pattern is redacted.
     pub patterns: Vec<String>,
 }
 
-fn default_label() -> String {
-    "regex".to_owned()
-}
-
-impl Default for RegexConfig {
-    fn default() -> Self {
-        Self {
-            label: default_label(),
-            patterns: Vec::new(),
-        }
-    }
-}
-
 impl RegexConfig {
-    /// Compile one detector per pattern.
+    /// Compile one detector per pattern, each reporting as `regex`.
     pub fn detectors(&self) -> Result<Vec<RegexDetector>, Error> {
         self.patterns
             .iter()
-            .map(|pattern| RegexDetector::new(&self.label, pattern))
+            .map(|pattern| RegexDetector::new("regex", pattern))
             .collect()
     }
 }

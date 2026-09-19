@@ -226,7 +226,7 @@ mod tests {
         crate::config::Config::builtin()
             .detectors
             .iter()
-            .find_map(|d| match d {
+            .find_map(|d| match &d.config {
                 DetectorConfig::Entropy(config) => Some(config.clone()),
                 _ => None,
             })

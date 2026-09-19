@@ -1,4 +1,19 @@
 //! Scanning comments, which are skipped unless asked for.
+// Each test needs its format; a build without all of them leaves helpers unused.
+#![cfg_attr(
+    not(all(
+        feature = "json",
+        feature = "yaml",
+        feature = "toml",
+        feature = "hcl",
+        feature = "ini",
+        feature = "dotenv",
+        feature = "xml",
+        feature = "properties",
+        feature = "csv"
+    )),
+    allow(unused)
+)]
 
 mod common;
 
@@ -24,6 +39,7 @@ fn assert_comment_scanned(format: &str, input: &str, want: &str) {
     assert_eq!(redact(format, &got, true), got, "{format}: not idempotent");
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn json_line_and_block_comments() {
     assert_comment_scanned(
@@ -33,6 +49,7 @@ fn json_line_and_block_comments() {
     );
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn json_strings_that_look_like_comments_are_left_alone() {
     let input = format!(r#"{{"note": "// not a comment {S}"}}"#);
@@ -42,6 +59,7 @@ fn json_strings_that_look_like_comments_are_left_alone() {
     assert_eq!(redact("json", &input, true), want);
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn yaml_comments() {
     assert_comment_scanned(
@@ -51,6 +69,7 @@ fn yaml_comments() {
     );
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn yaml_hashes_inside_scalars_are_not_comments() {
     // The block scalar's body is a value: redacted once, and not spliced
@@ -61,6 +80,7 @@ fn yaml_hashes_inside_scalars_are_not_comments() {
     assert_eq!(redact("yaml", &input, false), want);
 }
 
+#[cfg(feature = "toml")]
 #[test]
 fn toml_comments() {
     assert_comment_scanned(
@@ -70,12 +90,14 @@ fn toml_comments() {
     );
 }
 
+#[cfg(feature = "toml")]
 #[test]
 fn toml_hashes_inside_strings_are_not_comments() {
     let input = "a = \"x # y\"\nb = '''\n# z\n'''\n";
     assert_eq!(redact("toml", input, true), input);
 }
 
+#[cfg(feature = "hcl")]
 #[test]
 fn hcl_comments() {
     assert_comment_scanned(
@@ -85,6 +107,7 @@ fn hcl_comments() {
     );
 }
 
+#[cfg(feature = "hcl")]
 #[test]
 fn hcl_heredoc_bodies_are_values_not_comments() {
     let input = format!("a = <<EOT\n# inside {S}\nEOT\n");
@@ -93,6 +116,7 @@ fn hcl_heredoc_bodies_are_values_not_comments() {
     assert_eq!(redact("hcl", &input, false), want);
 }
 
+#[cfg(all(feature = "ini", feature = "dotenv"))]
 #[test]
 fn ini_and_dotenv_comments() {
     assert_comment_scanned(
@@ -107,6 +131,7 @@ fn ini_and_dotenv_comments() {
     );
 }
 
+#[cfg(feature = "xml")]
 #[test]
 fn xml_comments() {
     assert_comment_scanned(
@@ -116,6 +141,7 @@ fn xml_comments() {
     );
 }
 
+#[cfg(feature = "properties")]
 #[test]
 fn properties_comments() {
     assert_comment_scanned(
@@ -125,6 +151,7 @@ fn properties_comments() {
     );
 }
 
+#[cfg(feature = "toml")]
 #[test]
 fn a_secret_in_a_comment_shares_the_token_with_the_same_value_elsewhere() {
     let input = format!("# see {S}\na = \"{S}\"\n");
@@ -134,6 +161,7 @@ fn a_secret_in_a_comment_shares_the_token_with_the_same_value_elsewhere() {
     );
 }
 
+#[cfg(feature = "csv")]
 #[test]
 fn formats_without_comments_are_unaffected() {
     let input = format!("name,key\nx,{S}\n");

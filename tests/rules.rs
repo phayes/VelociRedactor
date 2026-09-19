@@ -1,12 +1,13 @@
 //! Forcing and sparing redactions by key path, value, pattern, and detector.
+#![cfg(feature = "json")]
 
 mod common;
 
 use common::HIGH_ENTROPY_SECRET as S;
 use velociredactor::config::Config;
 use velociredactor::detect::{
-    BETTERLEAKS_RULESET, DetectorConfig, EmailConfig, PathDetector, RegexConfig, RegexDetector,
-    RulesetDetector, ValueDetector,
+    BETTERLEAKS_RULESET, DetectorConfig, DetectorEntry, EmailConfig, PathDetector, RegexConfig,
+    RegexDetector, RulesetDetector, ValueDetector,
 };
 use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor, RedactorBuilder};
 
@@ -42,10 +43,10 @@ fn redact_with(redactor: &Redactor, input: &str) -> String {
 /// the email detector, which it never lists.
 fn configured(keep: &[&str]) -> Redactor {
     let mut config = Config::builtin().clone();
-    config.detectors.retain(|d| keep.contains(&d.name()));
+    config.detectors.retain(|d| keep.contains(&d.config.id()));
     config
         .detectors
-        .push(DetectorConfig::PiiEmail(EmailConfig::default()));
+        .push(DetectorConfig::PiiEmail(EmailConfig::default()).into());
     config.redactor().expect("valid configuration").0
 }
 
@@ -168,6 +169,7 @@ fn allowed_within_does_not_spare_a_secret_reaching_past_the_match() {
     assert_eq!(out, doc);
 }
 
+#[cfg(feature = "yaml")]
 #[test]
 fn allowed_within_applies_to_comments() {
     let doc = format!("# {FONT_URL}\nfont: x\n");
@@ -293,14 +295,19 @@ fn only_the_configured_detectors_run() {
 #[test]
 fn regex_entries_report_their_configured_label() {
     let mut config = Config::builtin().clone();
-    config.detectors.push(DetectorConfig::Regex(RegexConfig {
-        label: "acme".to_owned(),
-        patterns: vec!["ACME-[0-9]{4}".to_owned()],
-    }));
-    config.detectors.push(DetectorConfig::Regex(RegexConfig {
-        patterns: vec!["ticket-[0-9]+".to_owned()],
-        ..RegexConfig::default()
-    }));
+    config.detectors.push(DetectorEntry {
+        label: Some("acme".to_owned()),
+        ..DetectorConfig::Regex(RegexConfig {
+            patterns: vec!["ACME-[0-9]{4}".to_owned()],
+        })
+        .into()
+    });
+    config.detectors.push(
+        DetectorConfig::Regex(RegexConfig {
+            patterns: vec!["ticket-[0-9]+".to_owned()],
+        })
+        .into(),
+    );
     let redactor = config.redactor().expect("valid configuration").0;
 
     let redaction = redactor
@@ -338,17 +345,59 @@ fn ruleset_rules_can_be_excluded_by_id() {
     let doc = format!(r#"{{"note": "{key}"}}"#);
 
     let mut config = Config::builtin().clone();
-    config.detectors.retain(|d| d.name() == "ruleset");
+    config.detectors.retain(|d| d.config.id() == "ruleset");
     let ruleset = config.redactor().expect("valid configuration").0;
     assert_eq!(redact_with(&ruleset, &doc), r#"{"note": "[REDACTED-1]"}"#);
 
     for detector in &mut config.detectors {
-        if let DetectorConfig::Ruleset(ruleset) = detector {
+        if let DetectorConfig::Ruleset(ruleset) = &mut detector.config {
             ruleset.exclude_rules = vec!["github-*".into()];
         }
     }
     let excluded = config.redactor().expect("valid configuration").0;
     assert_eq!(redact_with(&excluded, &doc), doc);
+}
+
+/// A relabelled ruleset reports its own label in place of `ruleset`, and
+/// keeps the id of the rule that matched.
+#[test]
+fn a_relabelled_ruleset_keeps_its_rule_ids() {
+    let doc = r#"{"note": "ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2"}"#;
+    let mut config = Config::builtin().clone();
+    config.detectors.retain(|d| d.config.id() == "ruleset");
+    config.detectors[0].label = Some("gitleaks".into());
+    let redaction = config
+        .redactor()
+        .expect("valid configuration")
+        .0
+        .redact(doc.as_bytes(), FormatHint::Name("json"))
+        .expect("valid json");
+    assert_eq!(redaction.findings()[0].detector, "gitleaks:github-pat");
+}
+
+/// A disabled entry runs only once turned on, by label or by detector id.
+#[test]
+fn a_disabled_entry_runs_only_when_enabled() {
+    let doc = r#"{"a": "ACME-1234"}"#;
+    let mut config = Config::builtin().clone();
+    config.detectors.push(DetectorEntry {
+        enabled: false,
+        label: Some("acme".into()),
+        config: DetectorConfig::Regex(RegexConfig {
+            patterns: vec!["ACME-[0-9]{4}".to_owned()],
+        }),
+    });
+    let off = config.redactor().expect("valid configuration").0;
+    assert_eq!(redact_with(&off, doc), doc);
+
+    for name in ["acme", "regex"] {
+        let mut config = config.clone();
+        assert!(config.enable_detectors(&[name.to_owned()]).is_empty());
+        let on = config.redactor().expect("valid configuration").0;
+        assert_eq!(redact_with(&on, doc), r#"{"a": "[REDACTED-1]"}"#);
+    }
+
+    assert_eq!(config.enable_detectors(&["nope".to_owned()]), ["nope"]);
 }
 
 /// The same, through the Rust API, on the bundled ruleset itself.

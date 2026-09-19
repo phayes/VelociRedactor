@@ -1,4 +1,9 @@
-#![doc = include_str!("../README.crate.md")]
+// The README's example redacts JSON, so a build without it has a summary.
+#![cfg_attr(feature = "json", doc = include_str!("../README.crate.md"))]
+#![cfg_attr(
+    not(feature = "json"),
+    doc = "Redact secrets and PII from text and structured files, with stable numbered redactions."
+)]
 #![deny(missing_docs)]
 
 pub mod agent;

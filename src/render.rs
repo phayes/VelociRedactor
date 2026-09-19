@@ -114,9 +114,7 @@ impl ReplacementFormat {
             ));
         }
         if self.parts.contains(&Part::Reason) && !valid_reason(reason) {
-            return Err(Error::Replacement(
-                "the reason must start with an ASCII letter, digit, or `_` and contain only ASCII letters, digits, `_`, `.`, `:`, `/`, and `-`".into(),
-            ));
+            return Err(Error::Replacement(format!("the reason {REASON_RULE}")));
         }
         let mut out = String::new();
         for part in self.parts.iter() {
@@ -221,7 +219,11 @@ fn reason_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '/' | '-')
 }
 
-fn valid_reason(reason: &str) -> bool {
+/// What [`valid_reason`] requires, to follow "the reason" or "a label".
+pub(crate) const REASON_RULE: &str = "must start with an ASCII letter, digit, or `_` and contain only ASCII letters, digits, `_`, `.`, `:`, `/`, and `-`";
+
+/// Whether `reason` can be written as `{reason}` and found again.
+pub(crate) fn valid_reason(reason: &str) -> bool {
     let mut chars = reason.chars();
     chars
         .next()

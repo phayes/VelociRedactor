@@ -3,12 +3,16 @@
 mod common;
 
 use common::*;
+#[cfg(feature = "json")]
 use velociredactor::config::Config;
+#[cfg(feature = "json")]
+use velociredactor::detect::DetectorConfig;
 use velociredactor::detect::{
-    AddressDetector, Detection, Detector, DetectorConfig, DocumentValue, EmailDetector,
-    LeafContext, PhoneDetector, RegexDetector,
+    AddressDetector, Detection, Detector, DocumentValue, EmailDetector, LeafContext, PhoneDetector,
+    RegexDetector,
 };
 use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+#[cfg(feature = "json")]
 use velociredactor::policy::ScanAll;
 use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder, ReplacementFormat};
 
@@ -130,18 +134,22 @@ fn allow_by_value() {
 
 #[test]
 fn output_redacts_to_itself() {
-    for (format, input) in [
+    let cases = [
         (
             "text",
             format!("x {S} DB_PASSWORD=hunter2 postgres://u:pw@h/db"),
         ),
+        #[cfg(feature = "json")]
         (
             "json",
             format!(r#"{{"k":"{S}","db_password":"hunter2","e":"a@b.co"}}"#),
         ),
+        #[cfg(feature = "yaml")]
         ("yaml", format!("k: {S}\ndb_password: hunter2\n")),
+        #[cfg(feature = "dotenv")]
         ("dotenv", format!("API_KEY={S}\nDB_PASSWORD=hunter2\n")),
-    ] {
+    ];
+    for (format, input) in cases {
         let redactor = Redactor::builder()
             .detector(EmailDetector::default())
             .detector(PhoneDetector)
@@ -181,6 +189,7 @@ fn empty_builder_redacts_nothing() {
 
 /// The thresholds live on the detector, so lowering one means building the
 /// detector with a lower one and adding it in place of the configured one.
+#[cfg(feature = "json")]
 #[test]
 fn entropy_thresholds_live_on_the_detector() {
     let input = r#"{"api_key":"production"}"#;
@@ -188,7 +197,7 @@ fn entropy_thresholds_live_on_the_detector() {
 
     let mut config = Config::builtin().clone();
     for detector in &mut config.detectors {
-        if let DetectorConfig::Entropy(entropy) = detector {
+        if let DetectorConfig::Entropy(entropy) = &mut detector.config {
             entropy.sensitive_threshold = 3.0;
         }
     }
@@ -199,6 +208,7 @@ fn entropy_thresholds_live_on_the_detector() {
     );
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn scan_all_policy_scans_skipped_keys() {
     let input = format!(r#"{{"session_id":"{S}"}}"#);
@@ -211,6 +221,7 @@ fn scan_all_policy_scans_skipped_keys() {
     );
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn raw_skips_format_detection() {
     let input = format!(r#"{{"token":"{S}","session_id":"{S}"}}"#);
@@ -252,8 +263,10 @@ impl Detector for Banana {
 
 /// A document-scoped detector: flags every value that comes after one equal
 /// to "flag", which no per-value detector could know.
+#[cfg(feature = "json")]
 struct AfterFlag;
 
+#[cfg(feature = "json")]
 impl Detector for AfterFlag {
     fn name(&self) -> &str {
         "after_flag"
@@ -283,6 +296,7 @@ impl Detector for AfterFlag {
     }
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn document_scoped_detectors_see_the_whole_document() {
     let redactor = RedactorBuilder::new()
@@ -302,6 +316,7 @@ fn document_scoped_detectors_see_the_whole_document() {
     );
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn document_scoped_detectors_are_given_only_scanned_values() {
     let redactor = RedactorBuilder::new()
@@ -400,6 +415,7 @@ fn user_defined_format_and_detector() {
     );
 }
 
+#[cfg(feature = "json")]
 #[test]
 fn locations_point_at_the_secret() {
     let input = format!("{{\n  \"a\": \"x\",\n  \"b\": \"prefix {S}\"\n}}");
@@ -411,7 +427,7 @@ fn locations_point_at_the_secret() {
     assert_eq!(redaction.line_col(finding.offset().unwrap()), (3, 16));
 }
 
-#[cfg(feature = "parallel")]
+#[cfg(all(feature = "parallel", feature = "json"))]
 #[test]
 fn large_jsonl_is_consistent() {
     let mut input = String::new();

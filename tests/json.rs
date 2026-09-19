@@ -1,3 +1,5 @@
+#![cfg(feature = "json")]
+
 mod common;
 
 use common::*;

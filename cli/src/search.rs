@@ -26,8 +26,8 @@ use termcolor::NoColor;
 use velociredactor::FormatHint;
 
 use crate::util::{
-    CONFIG_ENV, ConfigArg, Fatal, RulesCache, WalkOptions, display_path, for_each_ordered,
-    is_broken_pipe, is_file, walk_builder,
+    CONFIG_ENV, ConfigArg, DetectorArg, Fatal, RulesCache, WalkOptions, display_path,
+    for_each_ordered, is_broken_pipe, is_file, walk_builder,
 };
 
 /// Flags follow ripgrep's. Output is never colored and never grouped under
@@ -178,6 +178,9 @@ pub struct GrepArgs {
     /// file uses the configuration found from its own directory.
     #[arg(long, value_name = "FILE", env = CONFIG_ENV)]
     config: Option<PathBuf>,
+
+    #[command(flatten)]
+    enable: DetectorArg,
 }
 
 /// How results are printed. Each file prints into a buffer of its own, so
@@ -418,6 +421,7 @@ fn run(args: &GrepArgs) -> Result<ExitCode> {
         matcher: matcher(args, &patterns)?,
         rules: RulesCache::new(ConfigArg {
             config: args.config.clone(),
+            enable: args.enable.clone(),
         }),
         show_path: !args.no_filename
             && (args.with_filename || paths.len() > 1 || paths.iter().any(|p| p.is_dir())),
