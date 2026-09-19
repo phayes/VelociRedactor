@@ -1,2 +1,4 @@
 /target
 /plugin/libexec
+/result
+/result-*

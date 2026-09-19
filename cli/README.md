@@ -15,10 +15,27 @@ This README is the command-line manual. For the Rust library, see the [`velocire
 
 ## Install
 
-From cargo:
+The latest release for this platform:
+
+```console
+curl -fsSL https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.sh | bash
+```
+
+```powershell
+irm https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.ps1 | iex
+```
+
+The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
 
 ```console
 cargo install velociredactor-cli
+```
+
+With Nix:
+
+```console
+nix run github:phayes/velociredactor
+nix profile install github:phayes/velociredactor
 ```
 
 The binary includes the default rules and all supported structured formats. It also includes the optional OpenAI Privacy Filter detector; that model is downloaded separately and is disabled in the default configuration.
