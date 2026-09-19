@@ -63,7 +63,7 @@ fn finds_personal_data_in_the_values_it_belongs_to() {
     );
     assert_eq!(
         String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
-        r#"{"customer_name":"REDACTION-1","note":"mail REDACTION-2","status":"shipped"}"#
+        r#"{"customer_name":"[REDACTED-1]","note":"mail [REDACTED-2]","status":"shipped"}"#
     );
 }
 

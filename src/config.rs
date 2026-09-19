@@ -4,7 +4,8 @@
 //! which of them are documentation rather than secrets
 //! ([`placeholder`](Config::placeholder)), which detectors run and what each
 //! one is told ([`detectors`](Config::detectors)), which input formats are
-//! recognized ([`formats`](Config::formats)), and what to spare whatever
+//! recognized ([`formats`](Config::formats)), how a redacted secret is written
+//! back ([`replacement`](Config::replacement)), and what to spare whatever
 //! found it ([`allow`](Config::allow)). The one built into the binary is
 //! [`Config::builtin`].
 //!
@@ -43,7 +44,7 @@ use crate::detect::{DetectorConfig, PlaceholderConfig, Placeholders};
 use crate::files::{FileGlobs, FileKeyPaths};
 use crate::format::{self, FormatRegistry};
 use crate::policy::{ConfigPolicy, PolicyConfig};
-use crate::{Allow, Error, Redactor, RedactorBuilder};
+use crate::{Allow, Error, Redactor, RedactorBuilder, ReplacementFormat};
 
 /// The configuration built into this binary.
 const DEFAULT_CONFIG: &str = include_str!("../default_config.yml");
@@ -56,6 +57,11 @@ pub struct Config {
     /// Scan comments as well as values, in formats that have them.
     #[serde(default)]
     pub comments: bool,
+    /// How a redacted secret is written back. `{n}` is the 1-based redaction
+    /// number; `{reason}` is the detector label. Defaults to
+    /// [`DEFAULT_REPLACEMENT`](crate::DEFAULT_REPLACEMENT).
+    #[serde(default)]
+    pub replacement: ReplacementFormat,
     /// Input formats to recognize, in detection priority order. Plain text is
     /// always available whether or not it is listed.
     pub formats: Vec<String>,
@@ -184,7 +190,7 @@ impl Config {
         let mut warnings = Vec::new();
 
         let placeholders = match Placeholders::new(&self.placeholder) {
-            Ok(placeholders) => Some(placeholders),
+            Ok(placeholders) => Some(placeholders.with_replacement(self.replacement.clone())),
             Err(error) => {
                 errors.push(error.to_string());
                 None
@@ -243,10 +249,12 @@ impl Config {
         builder: RedactorBuilder,
         warnings: &mut Vec<String>,
     ) -> Result<RedactorBuilder, Error> {
-        let placeholders = Placeholders::new(&self.placeholder)?;
+        let placeholders =
+            Placeholders::new(&self.placeholder)?.with_replacement(self.replacement.clone());
         let mut builder = builder
             .policy(ConfigPolicy::new(&self.policy)?)
             .comments(self.comments)
+            .replacement(self.replacement.clone())
             .allow_paths(&self.allow.paths)
             .allow_within(&self.allow.within)?;
 
@@ -291,6 +299,7 @@ mod tests {
     fn the_builtin_configuration_carries_no_rules() {
         let config = Config::builtin();
         assert!(!config.comments, "comments are off by default");
+        assert_eq!(config.replacement.as_str(), crate::DEFAULT_REPLACEMENT);
         assert!(config.allow.values.is_empty());
         assert!(config.allow.regexes.is_empty());
         assert!(config.allow.within.is_empty());
@@ -326,6 +335,33 @@ mod tests {
     #[test]
     fn the_builtin_configuration_lists_every_format() {
         assert_eq!(Config::builtin().formats, format::ALL_NAMES);
+    }
+
+    #[test]
+    fn an_invalid_replacement_format_is_rejected() {
+        let err = Config::from_yaml(&edited(
+            r#"replacement: "[REDACTED-{n}]""#,
+            r#"replacement: "[REDACTED-{id}]""#,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("{id}"), "{err}");
+        assert!(err.contains("{n}"), "{err}");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn a_custom_replacement_format_uses_number_and_reason() {
+        let config = Config::from_yaml(&edited(
+            r#"replacement: "[REDACTED-{n}]""#,
+            r#"replacement: "[{n}:{reason}]""#,
+        ))
+        .unwrap();
+        let out = redact(&config, r#"{"db_password":"hunter2","note":"ACME-0000"}"#);
+        assert_eq!(
+            out,
+            r#"{"db_password":"[1:credential_key]","note":"ACME-0000"}"#
+        );
     }
 
     #[cfg(feature = "json")]
@@ -367,7 +403,7 @@ mod tests {
         );
         assert_eq!(
             out,
-            r#"{"customer":"REDACTION-1","note":"REDACTION-2","build":{"key":"hunter2"}}"#
+            r#"{"customer":"[REDACTED-1]","note":"[REDACTED-2]","build":{"key":"hunter2"}}"#
         );
     }
 

@@ -13,7 +13,7 @@ use crate::format::{
 };
 use crate::glob::{Glob, any_match};
 use crate::policy::{DefaultPolicy, LeafPolicy};
-use crate::render::{self, Allow};
+use crate::render::{self, Allow, ReplacementFormat};
 
 /// Configures a [`Redactor`].
 ///
@@ -40,6 +40,7 @@ pub struct RedactorBuilder {
     comments: bool,
     allow_paths: Vec<Glob>,
     allow_within: Vec<Regex>,
+    replacement: ReplacementFormat,
 }
 
 impl Default for RedactorBuilder {
@@ -58,6 +59,7 @@ impl RedactorBuilder {
             comments: false,
             allow_paths: Vec::new(),
             allow_within: Vec::new(),
+            replacement: ReplacementFormat::default(),
         }
     }
 
@@ -151,6 +153,16 @@ impl RedactorBuilder {
         Ok(self)
     }
 
+    /// Set the format of replacement tokens. `{n}` is the 1-based redaction
+    /// number and `{reason}` is the detector label that found the secret.
+    ///
+    /// The default is [`DEFAULT_REPLACEMENT`](crate::DEFAULT_REPLACEMENT):
+    /// `[REDACTED-{n}]`.
+    pub fn replacement(mut self, format: ReplacementFormat) -> Self {
+        self.replacement = format;
+        self
+    }
+
     /// Finish the builder and return an immutable redactor.
     pub fn build(self) -> Redactor {
         Redactor {
@@ -160,6 +172,7 @@ impl RedactorBuilder {
             comments: self.comments,
             allow_paths: self.allow_paths.into(),
             allow_within: self.allow_within.into(),
+            replacement: self.replacement,
         }
     }
 }
@@ -188,6 +201,7 @@ pub struct Redactor {
     comments: bool,
     allow_paths: Arc<[Glob]>,
     allow_within: Arc<[Regex]>,
+    replacement: ReplacementFormat,
 }
 
 impl Default for Redactor {
@@ -205,6 +219,11 @@ impl Redactor {
     /// Return the formats registered with this redactor.
     pub fn formats(&self) -> &FormatRegistry {
         &self.formats
+    }
+
+    /// The format of replacement tokens this redactor writes.
+    pub fn replacement(&self) -> &ReplacementFormat {
+        &self.replacement
     }
 
     /// Redact `input` as plain text, with every finding replaced.
@@ -279,11 +298,12 @@ impl Redactor {
             input,
             format,
             comments: self.comments,
+            replacement: self.replacement.clone(),
             leaves: HashMap::new(),
             findings: Vec::new(),
             warnings,
         };
-        redaction.identify(&collector.leaves, detected);
+        redaction.identify(&collector.leaves, detected)?;
         Ok(redaction)
     }
 
@@ -359,7 +379,10 @@ impl Redactor {
             .iter()
             .zip(detected)
             .map(|(leaf, out)| {
-                self.drop_allowed_within(&leaf.value, render::merge(&leaf.value, out))
+                self.drop_allowed_within(
+                    &leaf.value,
+                    render::merge(&leaf.value, out, &self.replacement),
+                )
             })
             .collect())
     }
@@ -389,6 +412,7 @@ pub struct Redaction<'a> {
     input: &'a [u8],
     format: Arc<dyn Format>,
     comments: bool,
+    replacement: ReplacementFormat,
     /// Redacted ranges and the index of their finding, by leaf index.
     leaves: HashMap<usize, Vec<(Range<usize>, usize)>>,
     findings: Vec<Finding>,
@@ -399,12 +423,16 @@ pub struct Redaction<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     /// 1-based id of this distinct value in the document. Same text shares
-    /// an id. The replacement token is `REDACTION-<id>`.
+    /// an id. The replacement token is formatted from this id and
+    /// [`detector`](Self::detector); see [`ReplacementFormat`].
     pub id: usize,
     /// The redacted text.
     pub secret: String,
-    /// What detected the first occurrence.
+    /// What detected the first occurrence. Used as `{reason}` in the
+    /// replacement format.
     pub detector: String,
+    /// The formatted replacement token for this secret.
+    pub(crate) token: String,
     /// Length of the secret in bytes.
     pub len: usize,
     /// Field (object key) of the value containing the first occurrence, if any.
@@ -423,8 +451,8 @@ pub struct Finding {
 
 impl Finding {
     /// The replacement token for this secret.
-    pub fn token(&self) -> String {
-        render::token(self.id)
+    pub fn token(&self) -> &str {
+        &self.token
     }
 
     /// Byte offset of the first occurrence, when known.
@@ -465,7 +493,7 @@ impl Redaction<'_> {
         let tokens: Vec<Option<String>> = self
             .findings
             .iter()
-            .map(|f| (!allow.allows(f)).then(|| f.token()))
+            .map(|f| (!allow.allows(f)).then(|| f.token().to_owned()))
             .collect();
         let mut visitor = Renderer {
             leaves: &self.leaves,
@@ -476,7 +504,12 @@ impl Redaction<'_> {
         Ok(self.format.rewrite(self.input, &mut visitor)?)
     }
 
-    fn identify(&mut self, leaves: &[CollectedLeaf], detected: Vec<Vec<Detection>>) {
+    fn identify(
+        &mut self,
+        leaves: &[CollectedLeaf],
+        detected: Vec<Vec<Detection>>,
+    ) -> Result<(), Error> {
+        let replacement = self.replacement.clone();
         let mut by_secret: HashMap<String, usize> = HashMap::new();
         for (leaf, detections) in leaves.iter().zip(detected) {
             if detections.is_empty() {
@@ -485,19 +518,27 @@ impl Redaction<'_> {
             let mut ranges = Vec::with_capacity(detections.len());
             for detection in detections {
                 let text = &leaf.value[detection.range.clone()];
-                let index = *by_secret.entry(text.to_owned()).or_insert_with(|| {
+                let index = if let Some(index) = by_secret.get(text) {
+                    *index
+                } else {
+                    let id = self.findings.len() + 1;
+                    let detector = detection.label;
+                    let token = replacement.token(id, &detector)?;
                     self.findings.push(Finding {
-                        id: self.findings.len() + 1,
+                        id,
                         secret: text.to_owned(),
-                        detector: detection.label,
+                        detector,
+                        token,
                         len: text.len(),
                         field: leaf.key.clone(),
                         path: (!leaf.path.is_empty()).then(|| leaf.path.clone()),
                         offsets: Vec::new(),
                         occurrences: 0,
                     });
-                    self.findings.len() - 1
-                });
+                    let index = self.findings.len() - 1;
+                    by_secret.insert(text.to_owned(), index);
+                    index
+                };
                 ranges.push((detection.range, index));
             }
             self.leaves.insert(leaf.index, ranges);
@@ -529,6 +570,7 @@ impl Redaction<'_> {
         for finding in &mut self.findings {
             finding.offsets.sort_unstable();
         }
+        Ok(())
     }
 }
 

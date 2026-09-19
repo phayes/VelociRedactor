@@ -172,13 +172,13 @@ fn personal_data_detectors_are_opt_in() {
     let email_only = pii_redactor([email()]);
     assert_eq!(
         email_only.redact_str(input),
-        "contact REDACTION-1 and call 555-123-4567"
+        "contact [REDACTED-1] and call 555-123-4567"
     );
 
     let all = pii_redactor([email(), phone(), address()]);
     assert_eq!(
         all.redact_str("lives at 123 Main Street, call 555-123-4567"),
-        "lives at REDACTION-1, call REDACTION-2"
+        "lives at [REDACTED-1], call [REDACTED-2]"
     );
 }
 
@@ -207,7 +207,7 @@ fn custom_pii_patterns() {
 fn secrets_and_pii_coexist() {
     let redactor = pii_redactor([email()]);
     let got = redactor.redact_str(&format!("key={HIGH_ENTROPY_SECRET} user@example.com"));
-    assert_eq!(got, "REDACTION-1 REDACTION-2");
+    assert_eq!(got, "[REDACTED-1] [REDACTED-2]");
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn skipped_json_fields_are_not_scanned_for_pii() {
     let redaction = redactor.redact(input, FormatHint::Name("jsonl")).unwrap();
     assert_eq!(
         rendered(&redaction, &Allow::none()),
-        r#"{"file_path":"user@example.com/project/file.go","content":"contact REDACTION-1"}"#
+        r#"{"file_path":"user@example.com/project/file.go","content":"contact [REDACTED-1]"}"#
     );
 
     let paths = br#"{"file_path":"/private/var/folders/v4/31cd3cg52_sfrpb1mbtr7q7r0000gn/T/test/controller.go","cwd":"/private/var/folders/v4/31cd3cg52_sfrpb1mbtr7q7r0000gn/T/test","content":"normal text here"}"#;

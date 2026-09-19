@@ -23,7 +23,7 @@ fn no_secrets_is_unchanged() {
 fn value_with_secret_is_redacted() {
     assert_eq!(
         jsonl(&format!(r#"{{"type":"text","content":"key={S}"}}"#)),
-        r#"{"type":"text","content":"REDACTION-1"}"#
+        r#"{"type":"text","content":"[REDACTED-1]"}"#
     );
 }
 
@@ -32,11 +32,11 @@ fn hex_digest_is_redacted_under_sensitive_keys() {
     let hex = "b65cc3551e470d5abe2448d41429daa2";
     assert_eq!(
         json(&format!(r#"{{"api_key":"{hex}"}}"#)),
-        r#"{"api_key":"REDACTION-1"}"#
+        r#"{"api_key":"[REDACTED-1]"}"#
     );
     assert_eq!(
         json(&format!(r#"{{"apiKey":"{hex}"}}"#)),
-        r#"{"apiKey":"REDACTION-1"}"#
+        r#"{"apiKey":"[REDACTED-1]"}"#
     );
     assert_eq!(
         json(&format!(r#"{{"note":"{hex}"}}"#)),
@@ -61,7 +61,7 @@ fn hex_digest_is_redacted_under_sensitive_keys() {
 fn top_level_arrays() {
     assert_eq!(
         json(&format!(r#"["{S}","normal text"]"#)),
-        r#"["REDACTION-1","normal text"]"#
+        r#"["[REDACTED-1]","normal text"]"#
     );
     assert_eq!(json(r#"["hello","world"]"#), r#"["hello","world"]"#);
 }
@@ -73,7 +73,7 @@ fn every_line_is_redacted() {
     );
     assert_eq!(
         jsonl(&input),
-        "{\"content\":\"safe text\",\"id\":\"abc\"}\n{\"content\":\"REDACTION-1\",\"id\":\"def\"}\n{\"content\":\"also safe\",\"id\":\"ghi\"}"
+        "{\"content\":\"safe text\",\"id\":\"abc\"}\n{\"content\":\"[REDACTED-1]\",\"id\":\"def\"}\n{\"content\":\"also safe\",\"id\":\"ghi\"}"
     );
 }
 
@@ -81,7 +81,7 @@ fn every_line_is_redacted() {
 fn invalid_lines_are_redacted_as_text() {
     assert_eq!(
         jsonl(&format!(r#"{{"type":"text", "invalid {S} json"#)),
-        r#"{"type":"text", "invalid REDACTION-1 json"#
+        r#"{"type":"text", "invalid [REDACTED-1] json"#
     );
 }
 
@@ -94,7 +94,7 @@ fn malformed_line_with_escaped_newline_still_redacts_provider_token() {
     let line = format!(r#"{{"content":"line1\n{secret}"}} <-- truncated"#);
     let got = jsonl(&line);
     assert!(!got.contains(&secret), "{got}");
-    assert!(got.contains("REDACTION-1"));
+    assert!(got.contains("[REDACTED-1]"));
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn provider_token_in_nested_content() {
     );
     assert_eq!(
         jsonl(&line),
-        r#"{"type":"user","message":{"role":"user","content":"the service_role key is REDACTION-1 now"}}"#
+        r#"{"type":"user","message":{"role":"user","content":"the service_role key is [REDACTED-1] now"}}"#
     );
 }
 
@@ -117,7 +117,7 @@ fn skipped_fields_keep_values_that_are_redacted_elsewhere() {
     let input = format!(r#"{{"session_id":"{S}","content":"{S}"}}"#);
     assert_eq!(
         jsonl(&input),
-        format!(r#"{{"session_id":"{S}","content":"REDACTION-1"}}"#)
+        format!(r#"{{"session_id":"{S}","content":"[REDACTED-1]"}}"#)
     );
 }
 
@@ -134,7 +134,7 @@ fn image_objects_are_skipped() {
     assert_eq!(
         json(&input),
         format!(
-            r#"{{"a":{{"type":"image","data":"{S}"}},"b":{{"type":"text","content":"REDACTION-1"}}}}"#
+            r#"{{"a":{{"type":"image","data":"{S}"}},"b":{{"type":"text","content":"[REDACTED-1]"}}}}"#
         )
     );
 }
@@ -144,7 +144,7 @@ fn skipped_keys_cover_nested_containers() {
     let input = format!(r#"{{"ids":["{S}"],"content":["{S}"]}}"#);
     assert_eq!(
         json(&input),
-        format!(r#"{{"ids":["{S}"],"content":["REDACTION-1"]}}"#)
+        format!(r#"{{"ids":["{S}"],"content":["[REDACTED-1]"]}}"#)
     );
 }
 
@@ -154,7 +154,7 @@ fn credentialed_uri_in_content() {
         r#"{"type":"text","content":"DATABASE_URL=postgres://app:pwd123@db.example.com:5432/app"}"#;
     assert_eq!(
         jsonl(input),
-        r#"{"type":"text","content":"DATABASE_URL=REDACTION-1"}"#
+        r#"{"type":"text","content":"DATABASE_URL=[REDACTED-1]"}"#
     );
 }
 
@@ -164,7 +164,10 @@ fn private_key_block_inside_escaped_string() {
         serde_json::to_string(&format!("key:\n{}\nend", fake_openssh_private_key())).unwrap();
     let input = format!(r#"{{"type":"text","content":{content}}}"#);
     let got = jsonl(&input);
-    assert_eq!(got, r#"{"type":"text","content":"key:\nREDACTION-1\nend"}"#);
+    assert_eq!(
+        got,
+        r#"{"type":"text","content":"key:\n[REDACTED-1]\nend"}"#
+    );
 }
 
 #[test]
@@ -188,7 +191,7 @@ fn structured_credential_fields() {
     assert_eq!(
         jsonl(input),
         // Values identical to a redacted value are redacted too.
-        r#"{"type":"assistant","env":{"DB_PASSWORD":"REDACTION-1","REDIS_PASSWORD":"${REDIS_PASSWORD}","note":"REDACTION-1"},"db":{"password":"REDACTION-1","host":"db.example.com","user":"svc"},"session_id":"ses_37273a1fdffegpYbwUTqEkPsQ0"}"#
+        r#"{"type":"assistant","env":{"DB_PASSWORD":"[REDACTED-1]","REDIS_PASSWORD":"${REDIS_PASSWORD}","note":"[REDACTED-1]"},"db":{"password":"[REDACTED-1]","host":"db.example.com","user":"svc"},"session_id":"ses_37273a1fdffegpYbwUTqEkPsQ0"}"#
     );
 }
 
@@ -199,7 +202,7 @@ fn normalized_and_dotted_credential_keys() {
     );
     assert_eq!(
         got,
-        r#"{"env":{"DB Password":"REDACTION-1"},"session_id":"ses_37273a1fdffegpYbwUTqEkPsQ0"}"#
+        r#"{"env":{"DB Password":"[REDACTED-1]"},"session_id":"ses_37273a1fdffegpYbwUTqEkPsQ0"}"#
     );
 
     let got = jsonl(
@@ -207,7 +210,7 @@ fn normalized_and_dotted_credential_keys() {
     );
     assert_eq!(
         got,
-        r#"{"config":{"db.password":"REDACTION-1","mysql.root.password":"REDACTION-2"}}"#
+        r#"{"config":{"db.password":"[REDACTED-1]","mysql.root.password":"[REDACTED-2]"}}"#
     );
 }
 
@@ -218,7 +221,7 @@ fn root_password_keys() {
     );
     assert_eq!(
         got,
-        r#"{"env":{"MYSQL_ROOT_PASSWORD":"REDACTION-1","MONGO_INITDB_ROOT_PASSWORD":"REDACTION-2","MSSQL_SA_PASSWORD":"REDACTION-3"}}"#
+        r#"{"env":{"MYSQL_ROOT_PASSWORD":"[REDACTED-1]","MONGO_INITDB_ROOT_PASSWORD":"[REDACTED-2]","MSSQL_SA_PASSWORD":"[REDACTED-3]"}}"#
     );
 }
 
@@ -230,12 +233,12 @@ fn bare_password_needs_credential_context() {
     );
     assert_eq!(
         json(r#"{"db":{"host":"h","user":"u","password":"correct-horse"}}"#),
-        r#"{"db":{"host":"h","user":"u","password":"REDACTION-1"}}"#
+        r#"{"db":{"host":"h","user":"u","password":"[REDACTED-1]"}}"#
     );
     // Credential context is inherited by nested objects.
     assert_eq!(
         json(r#"{"host":"h","user":"u","auth":{"password":"correct-horse"}}"#),
-        r#"{"host":"h","user":"u","auth":{"password":"REDACTION-1"}}"#
+        r#"{"host":"h","user":"u","auth":{"password":"[REDACTED-1]"}}"#
     );
 }
 
@@ -244,7 +247,7 @@ fn shared_value_is_redacted_in_every_context() {
     let input = r#"{"db":{"host":"db.example.com","user":"svc","password":"shared-secret"},"misc":{"password":"shared-secret"}}"#;
     assert_eq!(
         jsonl(input),
-        r#"{"db":{"host":"db.example.com","user":"svc","password":"REDACTION-1"},"misc":{"password":"REDACTION-1"}}"#
+        r#"{"db":{"host":"db.example.com","user":"svc","password":"[REDACTED-1]"},"misc":{"password":"[REDACTED-1]"}}"#
     );
 }
 
@@ -325,7 +328,7 @@ fn pretty_printed_secrets_are_caught() {
         "{{\n  \"info\": {{ \"id\": \"ses_test123\" }},\n  \"parts\": [\n    {{ \"id\": \"prt_test789\", \"type\": \"text\", \"text\": \"your api key is {S}\" }}\n  ]\n}}\n"
     );
     let got = json(&input);
-    assert_eq!(got, input.replace(S, "REDACTION-1"));
+    assert_eq!(got, input.replace(S, "[REDACTED-1]"));
 }
 
 #[test]
@@ -333,7 +336,7 @@ fn secrets_in_content_next_to_paths() {
     let input = format!(r#"{{"file_path":"/tmp/test.go","content":"api_key={S}"}}"#);
     assert_eq!(
         jsonl(&input),
-        r#"{"file_path":"/tmp/test.go","content":"REDACTION-1"}"#
+        r#"{"file_path":"/tmp/test.go","content":"[REDACTED-1]"}"#
     );
 }
 
@@ -342,13 +345,13 @@ fn secrets_in_content_next_to_paths() {
 #[test]
 fn raw_line_separator() {
     let got = jsonl(&format!("{{\"text\":\"before \u{2028} {S}\"}}"));
-    assert_eq!(got, "{\"text\":\"before \u{2028} REDACTION-1\"}");
+    assert_eq!(got, "{\"text\":\"before \u{2028} [REDACTED-1]\"}");
 }
 
 #[test]
 fn escaped_solidus_is_kept() {
     let got = jsonl(&format!(r#"{{"text":"path\/to {S}"}}"#));
-    assert_eq!(got, r#"{"text":"path\/to REDACTION-1"}"#);
+    assert_eq!(got, r#"{"text":"path\/to [REDACTED-1]"}"#);
 }
 
 #[test]
@@ -356,20 +359,23 @@ fn escaped_ascii_inside_secret_rewrites_the_value() {
     let line = format!(r#"{{"text":"{}u0073{}"}}"#, '\\', &S[1..]);
     let got = jsonl(&line);
     assert!(!got.contains(&S[1..]), "{got}");
-    assert_eq!(got, r#"{"text":"REDACTION-1"}"#);
+    assert_eq!(got, r#"{"text":"[REDACTED-1]"}"#);
 }
 
 #[test]
 fn escaped_non_ascii() {
     let line = format!(r#"{{"text":"caf{}u00e9 {S}"}}"#, '\\');
     let got = jsonl(&line);
-    assert_eq!(got, format!(r#"{{"text":"caf{}u00e9 REDACTION-1"}}"#, '\\'));
+    assert_eq!(
+        got,
+        format!(r#"{{"text":"caf{}u00e9 [REDACTED-1]"}}"#, '\\')
+    );
 }
 
 #[test]
 fn same_value_with_different_spellings() {
     let got = jsonl(&format!(r#"{{"a":"x/y {S}","b":"x\/y {S}"}}"#));
-    assert_eq!(got, r#"{"a":"x/y REDACTION-1","b":"x\/y REDACTION-1"}"#);
+    assert_eq!(got, r#"{"a":"x/y [REDACTED-1]","b":"x\/y [REDACTED-1]"}"#);
 }
 
 #[test]
@@ -380,7 +386,7 @@ fn keyed_credential_with_escaped_value() {
     );
     assert_eq!(
         jsonl(&line),
-        r#"{"host":"db.example.com","username":"svc","password":"REDACTION-1"}"#
+        r#"{"host":"db.example.com","username":"svc","password":"[REDACTED-1]"}"#
     );
 }
 
@@ -388,16 +394,16 @@ fn keyed_credential_with_escaped_value() {
 fn duplicate_keys_are_all_scanned() {
     assert_eq!(
         jsonl(&format!(r#"{{"text":"{S}","text":"safe"}}"#)),
-        r#"{"text":"REDACTION-1","text":"safe"}"#
+        r#"{"text":"[REDACTED-1]","text":"safe"}"#
     );
     assert_eq!(
         jsonl(&format!(r#"{{"outer":[{{"k":"{S}","k":"safe"}}],"n":1}}"#)),
-        r#"{"outer":[{"k":"REDACTION-1","k":"safe"}],"n":1}"#
+        r#"{"outer":[{"k":"[REDACTED-1]","k":"safe"}],"n":1}"#
     );
     let pretty = format!("{{\n  \"text\": \"{S}\",\n  \"text\": \"safe\"\n}}");
     assert_eq!(
         json(&pretty),
-        "{\n  \"text\": \"REDACTION-1\",\n  \"text\": \"safe\"\n}"
+        "{\n  \"text\": \"[REDACTED-1]\",\n  \"text\": \"safe\"\n}"
     );
 }
 
@@ -413,7 +419,7 @@ fn formatting_and_numbers_are_preserved() {
     let line = format!(r#"{{ "text" : "{S}" , "n" : 12345678901234567890 }}"#);
     assert_eq!(
         jsonl(&line),
-        r#"{ "text" : "REDACTION-1" , "n" : 12345678901234567890 }"#
+        r#"{ "text" : "[REDACTED-1]" , "n" : 12345678901234567890 }"#
     );
 }
 
@@ -422,7 +428,7 @@ fn neighbouring_lines_are_untouched() {
     let content = format!("{{\"k\":\"v\"}}\n{{\"text\":\"a\\/b {S}\"}}\n{{\"k2\":\"v2\"}}\n");
     assert_eq!(
         jsonl(&content),
-        "{\"k\":\"v\"}\n{\"text\":\"a\\/b REDACTION-1\"}\n{\"k2\":\"v2\"}\n"
+        "{\"k\":\"v\"}\n{\"text\":\"a\\/b [REDACTED-1]\"}\n{\"k2\":\"v2\"}\n"
     );
 }
 
@@ -431,7 +437,7 @@ fn crlf_lines() {
     let content = format!("{{\"a\":\"{S}\"}}\r\n{{\"b\":\"ok\"}}\r\n");
     assert_eq!(
         jsonl(&content),
-        "{\"a\":\"REDACTION-1\"}\r\n{\"b\":\"ok\"}\r\n"
+        "{\"a\":\"[REDACTED-1]\"}\r\n{\"b\":\"ok\"}\r\n"
     );
 }
 
@@ -439,7 +445,7 @@ fn crlf_lines() {
 fn jsonc_comments_and_single_quotes() {
     let input =
         format!("{{\n  // a comment\n  'token': '{S}', /* trailing */\n  unquoted: \"ok\",\n}}\n");
-    assert_eq!(json(&input), input.replace(S, "REDACTION-1"));
+    assert_eq!(json(&input), input.replace(S, "[REDACTED-1]"));
 }
 
 #[test]
@@ -464,7 +470,7 @@ fn invalid_json_falls_back_to_text_when_auto_detected_by_path() {
     assert_eq!(redaction.warnings().len(), 1);
     assert_eq!(
         rendered(&redaction, &velociredactor::Allow::none()),
-        "not json at all REDACTION-1"
+        "not json at all [REDACTED-1]"
     );
 }
 

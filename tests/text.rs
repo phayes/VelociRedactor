@@ -13,7 +13,7 @@ fn no_secrets_is_unchanged() {
 fn high_entropy_secret_is_redacted() {
     assert_eq!(
         text(&format!("my key is {HIGH_ENTROPY_SECRET} ok")),
-        "my key is REDACTION-1 ok"
+        "my key is [REDACTED-1] ok"
     );
 }
 
@@ -27,14 +27,14 @@ fn hex_digest_in_free_text_is_not_redacted() {
 fn low_entropy_known_formats_are_redacted() {
     assert!(shannon_entropy(b"AKIAYRWQG5EJLPZLBYNP") <= 4.5);
     assert_text_cases(&[
-        ("key=AKIAYRWQG5EJLPZLBYNP", "key=REDACTION-1"),
+        ("key=AKIAYRWQG5EJLPZLBYNP", "key=[REDACTED-1]"),
         (
             "key=AKIAYRWQG5EJLPZLBYNP AKIAYRWQG5EJLPZLBYNP",
-            "key=REDACTION-1 REDACTION-1",
+            "key=[REDACTED-1] [REDACTED-1]",
         ),
         (
             "key=AKIAYRWQG5EJLPZLBYNPAKIAYRWQG5EJLPZLBYNP",
-            "key=REDACTION-1",
+            "key=[REDACTED-1]",
         ),
     ]);
 }
@@ -69,43 +69,43 @@ fn supabase_provider_tokens() {
     }
 
     let cases = [
-        (secret.clone(), "REDACTION-1".to_owned()),
+        (secret.clone(), "[REDACTED-1]".to_owned()),
         (
             format!("{secret} is the service_role key"),
-            "REDACTION-1 is the service_role key".into(),
+            "[REDACTED-1] is the service_role key".into(),
         ),
         (
             format!("service_role key: {secret}"),
-            "service_role key: REDACTION-1".into(),
+            "service_role key: [REDACTED-1]".into(),
         ),
         (
             format!(r#"SUPABASE_SERVICE_ROLE_KEY="{secret}""#),
-            r#"SUPABASE_SERVICE_ROLE_KEY="REDACTION-1""#.into(),
+            r#"SUPABASE_SERVICE_ROLE_KEY="[REDACTED-1]""#.into(),
         ),
-        (format!("key: '{secret}'"), "key: 'REDACTION-1'".into()),
+        (format!("key: '{secret}'"), "key: '[REDACTED-1]'".into()),
         (
             format!("{secret} then {secret}"),
-            "REDACTION-1 then REDACTION-1".into(),
+            "[REDACTED-1] then [REDACTED-1]".into(),
         ),
         (
             format!(r#"SUPABASE_SERVICE_ROLE_KEY="{real_secret}""#),
-            r#"SUPABASE_SERVICE_ROLE_KEY="REDACTION-1""#.into(),
+            r#"SUPABASE_SERVICE_ROLE_KEY="[REDACTED-1]""#.into(),
         ),
         (
             format!("SUPABASE_ACCESS_TOKEN={sbp}"),
-            "SUPABASE_ACCESS_TOKEN=REDACTION-1".into(),
+            "SUPABASE_ACCESS_TOKEN=[REDACTED-1]".into(),
         ),
-        (secret_hyphen, "REDACTION-1".into()),
-        (sbp_hyphen, "REDACTION-1".into()),
+        (secret_hyphen, "[REDACTED-1]".into()),
+        (sbp_hyphen, "[REDACTED-1]".into()),
         // Glued to a preceding word character, or to a literal `\n`.
-        (format!("x{secret}"), "xREDACTION-1".into()),
+        (format!("x{secret}"), "x[REDACTED-1]".into()),
         (
             format!(r"first line\n{secret}"),
-            r"first line\nREDACTION-1".into(),
+            r"first line\n[REDACTED-1]".into(),
         ),
         (
             format!(r"first line\n{sbp}"),
-            r"first line\nREDACTION-1".into(),
+            r"first line\n[REDACTED-1]".into(),
         ),
     ];
     let cases: Vec<(&str, &str)> = cases
@@ -124,9 +124,9 @@ fn supabase_length_boundaries() {
     let p20 = format!("{}{body20}", supabase_personal_prefix());
     let p19 = format!("{}{body19}", supabase_personal_prefix());
     assert_text_cases(&[
-        (&s20, "REDACTION-1"),
+        (&s20, "[REDACTED-1]"),
         (&s19, &s19),
-        (&p20, "REDACTION-1"),
+        (&p20, "[REDACTED-1]"),
         (&p19, &p19),
     ]);
 }
@@ -163,7 +163,10 @@ fn supabase_long_identifiers_are_over_redacted() {
         "call lib{}something_long_enough_value()",
         supabase_personal_prefix()
     );
-    assert_text_cases(&[(&a, "func REDACTION-1() {}"), (&b, "call libREDACTION-1()")]);
+    assert_text_cases(&[
+        (&a, "func [REDACTED-1]() {}"),
+        (&b, "call lib[REDACTED-1]()"),
+    ]);
 }
 
 #[test]
@@ -171,24 +174,24 @@ fn credentialed_uris() {
     assert_text_cases(&[
         (
             "DATABASE_URL=postgres://app:pwd123@db.example.com:5432/app",
-            "DATABASE_URL=REDACTION-1",
+            "DATABASE_URL=[REDACTED-1]",
         ),
         (
             r#"dsn="postgresql://svc:moderatepw@localhost/app?sslmode=require""#,
-            r#"dsn="REDACTION-1""#,
+            r#"dsn="[REDACTED-1]""#,
         ),
         (
             "mongo=mongodb+srv://user:pass123@cluster0.example.mongodb.net/app?retryWrites=true",
-            "mongo=REDACTION-1",
+            "mongo=[REDACTED-1]",
         ),
-        ("mysql://root:p@localhost:3306/app", "REDACTION-1"),
+        ("mysql://root:p@localhost:3306/app", "[REDACTED-1]"),
         (
             "cache redis://:hunter2@localhost:6379/0",
-            "cache REDACTION-1",
+            "cache [REDACTED-1]",
         ),
         (
             "proxy=https://user:pass@example.com/path",
-            "proxy=REDACTION-1",
+            "proxy=[REDACTED-1]",
         ),
         (
             "repo=ssh://git@github.com/example/cli",
@@ -224,7 +227,7 @@ fn credentialed_uris_with_a_placeholder_password() {
         ),
         // The host is not what makes it a placeholder: a real password beside
         // an example host is still a secret.
-        ("postgres://app:pwd123@example.com/app", "REDACTION-1"),
+        ("postgres://app:pwd123@example.com/app", "[REDACTED-1]"),
     ]);
 }
 
@@ -233,39 +236,39 @@ fn database_connection_strings() {
     assert_text_cases(&[
         (
             r#"dsn="host=db.example.com port=5432 user=svc password=hunter2 dbname=app sslmode=require""#,
-            r#"dsn="REDACTION-1""#,
+            r#"dsn="[REDACTED-1]""#,
         ),
         (
             "password=hunter2 sslmode=require user=svc host=db.example.com dbname=app",
-            "REDACTION-1",
+            "[REDACTED-1]",
         ),
         (
             "conn=Server=tcp:db.example.com,1433;Database=app;User Id=svc;Password=hunter2;Encrypt=true",
-            "conn=REDACTION-1",
+            "conn=[REDACTED-1]",
         ),
         (
             "conn=Driver={ODBC Driver 18 for SQL Server};Server=db;UID=svc;PWD=hunter2;Database=app",
-            "conn=REDACTION-1",
+            "conn=[REDACTED-1]",
         ),
         (
             "jdbc:postgresql://db.example.com:5432/app?user=svc&password=hunter2&ssl=true",
-            "REDACTION-1",
+            "[REDACTED-1]",
         ),
         (
             "DATABASE_URL=postgresql://db.example.com:5432/app?user=svc&password=hunter2&sslmode=require",
-            "DATABASE_URL=REDACTION-1",
+            "DATABASE_URL=[REDACTED-1]",
         ),
         (
             "DATABASE_URL=postgresql://db.example.com:5432/app?user=svc&Password=hunter2&sslmode=require",
-            "DATABASE_URL=REDACTION-1",
+            "DATABASE_URL=[REDACTED-1]",
         ),
         (
             "MONGO_URL=mongodb://cluster0.example.mongodb.net/app?authSource=admin&username=svc&password=hunter2",
-            "MONGO_URL=REDACTION-1",
+            "MONGO_URL=[REDACTED-1]",
         ),
         (
             "MONGO_URL=mongodb+srv://cluster0.example.mongodb.net/app?authSource=admin&username=svc&password=hunter2",
-            "MONGO_URL=REDACTION-1",
+            "MONGO_URL=[REDACTED-1]",
         ),
         (
             "DATABASE_URL=postgresql://db.example.com/app?user=svc&password=${DB_PASSWORD}",
@@ -273,15 +276,15 @@ fn database_connection_strings() {
         ),
         (
             "jdbc:sqlserver://db.example.com:1433;databaseName=app;user=svc;password=hunter2;encrypt=true",
-            "REDACTION-1",
+            "[REDACTED-1]",
         ),
         (
             r#"conn=Server=db.example.com;User ID=svc;Password="se;cret;here";Encrypt=true"#,
-            "conn=REDACTION-1",
+            "conn=[REDACTED-1]",
         ),
         (
             "conn=Server=db.example.com;User ID=svc;Password='se;cret;here';Encrypt=true",
-            "conn=REDACTION-1",
+            "conn=[REDACTED-1]",
         ),
     ]);
 }
@@ -289,35 +292,35 @@ fn database_connection_strings() {
 #[test]
 fn bounded_credential_values() {
     assert_text_cases(&[
-        ("DB_PASSWORD=secret123", "DB_PASSWORD=REDACTION-1"),
-        ("PGPASSWORD='secret123'", "PGPASSWORD='REDACTION-1'"),
+        ("DB_PASSWORD=secret123", "DB_PASSWORD=[REDACTED-1]"),
+        ("PGPASSWORD='secret123'", "PGPASSWORD='[REDACTED-1]'"),
         (
             r#"REDIS_PASSWORD="secret123""#,
-            r#"REDIS_PASSWORD="REDACTION-1""#,
+            r#"REDIS_PASSWORD="[REDACTED-1]""#,
         ),
         (
             "database_password=secret123",
-            "database_password=REDACTION-1",
+            "database_password=[REDACTED-1]",
         ),
-        ("APP_DB_PASSWORD=secret123", "APP_DB_PASSWORD=REDACTION-1"),
-        ("PROD_MYSQL_PWD=secret123", "PROD_MYSQL_PWD=REDACTION-1"),
+        ("APP_DB_PASSWORD=secret123", "APP_DB_PASSWORD=[REDACTED-1]"),
+        ("PROD_MYSQL_PWD=secret123", "PROD_MYSQL_PWD=[REDACTED-1]"),
         (
             "MYSQL_ROOT_PASSWORD=secret123",
-            "MYSQL_ROOT_PASSWORD=REDACTION-1",
+            "MYSQL_ROOT_PASSWORD=[REDACTED-1]",
         ),
         (
             "MARIADB_ROOT_PASSWORD=secret123",
-            "MARIADB_ROOT_PASSWORD=REDACTION-1",
+            "MARIADB_ROOT_PASSWORD=[REDACTED-1]",
         ),
         (
             "MONGO_INITDB_ROOT_PASSWORD=secret123",
-            "MONGO_INITDB_ROOT_PASSWORD=REDACTION-1",
+            "MONGO_INITDB_ROOT_PASSWORD=[REDACTED-1]",
         ),
         (
             "MSSQL_SA_PASSWORD=secret123",
-            "MSSQL_SA_PASSWORD=REDACTION-1",
+            "MSSQL_SA_PASSWORD=[REDACTED-1]",
         ),
-        ("DB__PASSWORD=secret123", "DB__PASSWORD=REDACTION-1"),
+        ("DB__PASSWORD=secret123", "DB__PASSWORD=[REDACTED-1]"),
     ]);
 }
 
@@ -326,21 +329,21 @@ fn bounded_credential_value_over_redaction_guards() {
     assert_text_cases(&[
         ("DB_PASSWORD=${DB_PASSWORD}", "DB_PASSWORD=${DB_PASSWORD}"),
         ("DB_PASSWORD=REDACTED", "DB_PASSWORD=REDACTED"),
-        ("DB_PASSWORD=REDACTION-1", "DB_PASSWORD=REDACTION-1"),
+        ("DB_PASSWORD=[REDACTED-1]", "DB_PASSWORD=[REDACTED-1]"),
         (
             "the password field should be rotated regularly",
             "the password field should be rotated regularly",
         ),
         ("key=not-a-secret-setting", "key=not-a-secret-setting"),
         ("PWD=/workspace/project", "PWD=/workspace/project"),
-        ("password=not-a-secret-setting", "password=REDACTION-1"),
+        ("password=not-a-secret-setting", "password=[REDACTED-1]"),
         (
             "https://example.com/?password_reset=true",
             "https://example.com/?password_reset=true",
         ),
         (
             "https://example.com/callback?user=svc&password=not-a-db-credential&debug=true",
-            "https://example.com/callback?user=svc&password=REDACTION-1",
+            "https://example.com/callback?user=svc&password=[REDACTED-1]",
         ),
         ("DB_PASSWORD_HASH=abcdef", "DB_PASSWORD_HASH=abcdef"),
         ("MYSQL_USER_ID=alice", "MYSQL_USER_ID=alice"),
@@ -362,16 +365,16 @@ fn bounded_credential_value_over_redaction_guards() {
         // the tail can hold a real secret.
         (
             "password=changeme&db_pass=hunter2hunter2",
-            "password=REDACTION-1",
+            "password=[REDACTED-1]",
         ),
         (
             r#"password="changeme;realSecret42""#,
-            r#"password="REDACTION-1""#,
+            r#"password="[REDACTED-1]""#,
         ),
-        ("password=changeme&sslmode=require", "password=REDACTION-1"),
+        ("password=changeme&sslmode=require", "password=[REDACTED-1]"),
         (
             "password=hunter2secret&sslmode=require",
-            "password=REDACTION-1",
+            "password=[REDACTED-1]",
         ),
         ("DB_PASSWORD=placeholder", "DB_PASSWORD=placeholder"),
     ]);
@@ -380,19 +383,22 @@ fn bounded_credential_value_over_redaction_guards() {
 #[test]
 fn short_and_opaque_values_are_not_placeholders() {
     assert_text_cases(&[
-        ("DB_PASSWORD=x", "DB_PASSWORD=REDACTION-1"),
-        ("DB_PASSWORD=-", "DB_PASSWORD=REDACTION-1"),
-        ("DB_PASSWORD=*", "DB_PASSWORD=REDACTION-1"),
-        ("DB_PASSWORD=xx", "DB_PASSWORD=REDACTION-1"),
-        ("DB_PASSWORD=<hunter2>", "DB_PASSWORD=REDACTION-1"),
-        ("DB_PASSWORD=<RealPassword>", "DB_PASSWORD=REDACTION-1"),
+        ("DB_PASSWORD=x", "DB_PASSWORD=[REDACTED-1]"),
+        ("DB_PASSWORD=-", "DB_PASSWORD=[REDACTED-1]"),
+        ("DB_PASSWORD=*", "DB_PASSWORD=[REDACTED-1]"),
+        ("DB_PASSWORD=xx", "DB_PASSWORD=[REDACTED-1]"),
+        ("DB_PASSWORD=<hunter2>", "DB_PASSWORD=[REDACTED-1]"),
+        ("DB_PASSWORD=<RealPassword>", "DB_PASSWORD=[REDACTED-1]"),
     ]);
 }
 
 #[test]
 fn openssh_private_key_block_is_redacted_whole() {
     let key = fake_openssh_private_key();
-    assert_eq!(text(&format!("key:\n{key}\nend")), "key:\nREDACTION-1\nend");
+    assert_eq!(
+        text(&format!("key:\n{key}\nend")),
+        "key:\n[REDACTED-1]\nend"
+    );
 }
 
 #[test]
@@ -416,7 +422,7 @@ fn real_secrets_are_caught() {
         "token=ghp_1234567890abcdefghijklmnopqrstuvwxyzAB".to_owned(),
     ] {
         assert!(
-            text(&input).contains("REDACTION-"),
+            text(&input).contains("[REDACTED-"),
             "{input} was not redacted"
         );
     }
@@ -456,7 +462,7 @@ fn redaction_is_idempotent() {
 #[test]
 fn github_token_is_redacted_by_ruleset() {
     let input = "auth with token ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2";
-    assert_eq!(text(input), "auth with token REDACTION-1");
+    assert_eq!(text(input), "auth with token [REDACTED-1]");
 }
 
 #[test]

@@ -24,6 +24,11 @@ pub enum Error {
     #[error("config: {0}")]
     Config(String),
 
+    /// A replacement format or one of its values cannot produce an
+    /// unambiguous token.
+    #[error("replacement: {0}")]
+    Replacement(String),
+
     /// A detector failed while looking at the input, so the input cannot be
     /// said to be clean.
     #[error("{name}: {message}")]

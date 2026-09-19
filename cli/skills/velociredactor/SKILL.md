@@ -7,7 +7,7 @@ compatibility: Requires the veloci CLI on PATH (cargo install velociredactor-cli
 
 # Reading sensitive files with Veloci Redactor
 
-`veloci` prints a file with every secret and piece of personal data replaced by a numbered token such as `REDACTION-1`. The rest of the file is unchanged, including keys, comments and formatting. Read sensitive files through it, so the raw values never enter your context.
+`veloci` prints a file with every secret and piece of personal data replaced by a numbered token such as `[REDACTED-1]`. The rest of the file is unchanged, including keys, comments and formatting. Read sensitive files through it, so the raw values never enter your context.
 
 ## Step 0: check the project is set up
 
@@ -81,17 +81,17 @@ veloci grep -l 'password' .                  # file names only
 
 ## Working with redacted output
 
-- `REDACTION-N` stands for a secret you can't see. The same value always gets the same number within one run. So two fields showing `REDACTION-2` hold equal values, and you may reason about that.
+- `[REDACTED-N]` stands for a secret you can't see. The same value always gets the same number within one run. So two fields showing `[REDACTED-2]` hold equal values, and you may reason about that.
 - Never try to recover, guess, brute-force or reconstruct a redacted value. Never ask other tools to print it.
 - Never pass `--show-value`. It prints the secrets.
 - Never use `--in-place` or `--output` on the user's files without their explicit approval. Both rewrite files with the tokens in place of the real values.
-- Numbering is per run and per file. `REDACTION-1` in two different files, or in two runs, is not necessarily the same value.
+- Numbering is per run and per file. `[REDACTED-1]` in two different files, or in two runs, is not necessarily the same value.
 
 ## Editing protected files
 
 Your view of the file is redacted, so the rules for editing it are strict:
 
-- **A `REDACTION-N` token must never appear in any edit.** That covers the text you replace, the text you insert, a diff, a patch, a `sed` expression and a rewritten file. The file doesn't contain the token. The edit will either fail to match, or overwrite the real secret with the token and silently break the user's configuration.
+- **A `[REDACTED-N]` token must never appear in any edit.** That covers the text you replace, the text you insert, a diff, a patch, a `sed` expression and a rewritten file. The file doesn't contain the token. The edit will either fail to match, or overwrite the real secret with the token and silently break the user's configuration.
 - You **may** edit lines that contain no redacted value. Use an exact-match edit on text you saw in the redacted output that contains no token. Adding a new key, or changing a non-secret value next to a secret, is usually possible this way.
 - If your edit tool insists on reading the file itself first, don't read it raw to satisfy the tool. Use a targeted shell command whose text contains no token instead, such as appending a line with `printf '...\n' >> FILE` or a `sed` substitution anchored on token-free text. Otherwise ask the user.
 - Never rewrite a whole protected file, because that would write the tokens back.

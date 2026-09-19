@@ -52,5 +52,5 @@ Send the redacted version of each file it lists.
 
 - Redaction covers secrets and, when turned on, personal data. It doesn't remove internal hostnames, project names, or proprietary code. If content may be confidential beyond secrets, ask the user before sharing it at all.
 - Personal-data detection (`pii:*`, `privacy_filter`) is off unless the project turned it on. For customer data, check `veloci config show`. If needed, suggest the `velociredactor-config` skill to turn it on.
-- `REDACTION-N` tokens are safe to share. Say so if a reader might think they're a bug. For example: "values replaced by REDACTION-N tokens".
+- `[REDACTED-N]` tokens are safe to share. Say so if a reader might think they're a bug. For example: "values replaced by [REDACTED-N] tokens".
 - Never use `--show-value` output, or the unredacted original, in anything you share.

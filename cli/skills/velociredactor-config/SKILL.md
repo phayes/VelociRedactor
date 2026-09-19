@@ -45,6 +45,7 @@ veloci config show > veloci.yml
 | Emails, phone numbers, addresses | uncomment `pii:email`, `pii:phone`, `pii:address` | |
 | Names and other contextual PII | the `privacy_filter` detector | see below |
 | Secrets in comments | `comments: true` | |
+| The token written in place of a secret | `replacement` | `"[REDACTED-{n}]"` or `"[REDACTED-{n}:{reason}]"` |
 | Which files agents read redacted | `agent.protected`, `agent.exclude`, `agent.enforce` | `protected: [".env*", "secrets/"]` |
 
 Custom regex detector. Add it under `detectors:`. The `label` appears in `veloci list` output:

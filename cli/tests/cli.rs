@@ -143,7 +143,7 @@ fn extra_detector(entry: &str) -> (String, String) {
 fn redacts_stdin() {
     let out = redact(&[], &format!("token {S}\n"));
     assert!(out.status.success());
-    assert_eq!(stdout(&out), "token REDACTION-1\n");
+    assert_eq!(stdout(&out), "token [REDACTED-1]\n");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn detects_format_from_file_name() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        format!("token: \"REDACTION-1\"\nsession_id: {S}\n")
+        format!("token: \"[REDACTED-1]\"\nsession_id: {S}\n")
     );
 }
 
@@ -170,7 +170,7 @@ fn raw_skips_format_detection() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "token: REDACTION-1\nsession_id: REDACTION-1\n"
+        "token: [REDACTED-1]\nsession_id: [REDACTED-1]\n"
     );
 
     let sniffed = format!(r#"{{"token":"{S}","session_id":"{S}"}}"#);
@@ -178,7 +178,7 @@ fn raw_skips_format_detection() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        r#"{"token":"REDACTION-1","session_id":"REDACTION-1"}"#
+        r#"{"token":"[REDACTED-1]","session_id":"[REDACTED-1]"}"#
     );
 
     let out = list(&["--json", "--raw"], &sniffed);
@@ -197,11 +197,11 @@ fn allow_and_check() {
 
     let out = redact(&["--check"], &input);
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(stdout(&out), "a REDACTION-1\nb DB_PASSWORD=REDACTION-2\n");
+    assert_eq!(stdout(&out), "a [REDACTED-1]\nb DB_PASSWORD=[REDACTED-2]\n");
 
     let one = rules_config(dir.path(), "allow:\n  values: [hunter2]\n");
     let out = redact(&["--config", &one], &input);
-    assert_eq!(stdout(&out), "a REDACTION-1\nb DB_PASSWORD=hunter2\n");
+    assert_eq!(stdout(&out), "a [REDACTED-1]\nb DB_PASSWORD=hunter2\n");
 
     let both = write_config(
         dir.path(),
@@ -226,7 +226,7 @@ fn list_shows_token_start_and_length_but_not_values() {
     }
     assert!(!lines[0].contains("VALUE"), "{table}");
     let row: Vec<&str> = lines[1].split_whitespace().collect();
-    assert_eq!(row[..6], ["REDACTION-1", "entropy", "2", "45", "1", "1:3"]);
+    assert_eq!(row[..6], ["[REDACTED-1]", "entropy", "2", "45", "1", "1:3"]);
     assert!(!table.contains(S), "{table}");
     assert!(out.stderr.is_empty());
 
@@ -267,7 +267,7 @@ fn json_list() {
     assert_eq!(doc["format"], "json");
     let entry = &doc["redactions"][0];
     assert_eq!(entry["id"], 1);
-    assert_eq!(entry["token"], "REDACTION-1");
+    assert_eq!(entry["token"], "[REDACTED-1]");
     assert_eq!(entry["detector"], "entropy");
     assert_eq!(entry["start"], 19);
     assert_eq!(entry["length"], 45);
@@ -299,7 +299,7 @@ fn explicit_format_and_pii() {
         &["-f", "json", "--config", &config],
         r#"{"to":"jane@corp.example","id":"x"}"#,
     );
-    assert_eq!(stdout(&out), r#"{"to":"REDACTION-1","id":"x"}"#);
+    assert_eq!(stdout(&out), r#"{"to":"[REDACTED-1]","id":"x"}"#);
 
     let out = redact(&["-f", "nope"], "");
     assert_eq!(out.status.code(), Some(2));
@@ -320,12 +320,12 @@ fn entropy_thresholds_are_configuration() {
     );
     let out = redact(&["-f", "json", "--config", &sensitive], input);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), r#"{"api_key":"REDACTION-1"}"#);
+    assert_eq!(stdout(&out), r#"{"api_key":"[REDACTED-1]"}"#);
 
     let ordinary = write_config(dir.path(), &[("threshold: 4.5", "threshold: 3.0")], "");
     let out = redact(&["--config", &ordinary], "production ");
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "REDACTION-1 ");
+    assert_eq!(stdout(&out), "[REDACTED-1] ");
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn custom_regex_rules() {
     let dir = tempfile::tempdir().unwrap();
     let config = detector_config(dir.path(), "  - regex:\n      patterns: ['ACME_[0-9]{4}']");
     let out = redact(&["--config", &config], "id ACME_1234\n");
-    assert_eq!(stdout(&out), "id REDACTION-1\n");
+    assert_eq!(stdout(&out), "id [REDACTED-1]\n");
 
     let listed = list(&["--json", "--config", &config], "id ACME_1234\n");
     let doc: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
@@ -349,7 +349,7 @@ fn custom_regex_rules() {
         "",
     );
     let out = redact(&["--config", &labelled], "ref TEAM-123\n");
-    assert_eq!(stdout(&out), "ref REDACTION-1\n");
+    assert_eq!(stdout(&out), "ref [REDACTED-1]\n");
 
     let listed = list(&["--json", "--config", &labelled], "ref TEAM-123\n");
     let doc: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
@@ -383,7 +383,7 @@ fn custom_ruleset_replaces_bundled_rules() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "REDACTION-1 ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2\n"
+        "[REDACTED-1] ghp_a1b2c1d2e1f2g1h2a1b2c1d2e1f2g1h2a1b2\n"
     );
 
     let listed = list(&["--json", "--config", &config], input);
@@ -404,12 +404,12 @@ fn output_and_in_place() {
     );
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
-    assert_eq!(fs::read_to_string(&output).unwrap(), "KEY=REDACTION-1\n");
+    assert_eq!(fs::read_to_string(&output).unwrap(), "KEY=[REDACTED-1]\n");
 
     let out = redact(&[input.to_str().unwrap(), "--in-place"], "");
     assert!(out.status.success());
     let redacted = fs::read_to_string(&input).unwrap();
-    assert_eq!(redacted, "KEY=REDACTION-1\n");
+    assert_eq!(redacted, "KEY=[REDACTED-1]\n");
 
     // Running again on redacted output changes nothing.
     let out = redact(&[input.to_str().unwrap(), "--check"], "");
@@ -429,7 +429,7 @@ fn invalid_structured_input_falls_back_to_text() {
     let out = redact(&[path.to_str().unwrap()], "");
     assert!(out.status.success());
     assert!(stderr(&out).contains("treating input as plain text"));
-    assert_eq!(stdout(&out), "{ not json REDACTION-1");
+    assert_eq!(stdout(&out), "{ not json [REDACTED-1]");
 }
 
 #[test]
@@ -511,7 +511,7 @@ fn comments_are_scanned_only_when_asked() {
     let config = write_config(dir.path(), &[("comments: false", "comments: true")], "");
     let out = redact(&["-f", "toml", "--config", &config], &input);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "# token REDACTION-1\nkey = \"ok\"\n");
+    assert_eq!(stdout(&out), "# token [REDACTED-1]\nkey = \"ok\"\n");
 }
 
 #[test]
@@ -523,7 +523,7 @@ fn path_rules() {
     let out = redact(&["-f", "json", "--config", &any_ssn], input);
     assert_eq!(
         stdout(&out),
-        r#"{"users":[{"ssn":"REDACTION-1"}],"db":{"note":"hi"}}"#
+        r#"{"users":[{"ssn":"[REDACTED-1]"}],"db":{"note":"hi"}}"#
     );
 
     let listed = list(&["--json", "-f", "json", "--config", &any_ssn], input);
@@ -536,7 +536,7 @@ fn path_rules() {
     let out = redact(&["-f", "json", "--config", &keep], &guarded);
     assert_eq!(
         stdout(&out),
-        format!(r#"{{"keep":{{"k":"{S}"}},"other":"REDACTION-1"}}"#)
+        format!(r#"{{"keep":{{"k":"{S}"}},"other":"[REDACTED-1]"}}"#)
     );
 }
 
@@ -546,7 +546,7 @@ fn value_and_regex_rules() {
 
     let value = detector_config(dir.path(), "  - value:\n      values: [Bluebird]");
     let out = redact(&["--config", &value], "codename Bluebird\n");
-    assert_eq!(stdout(&out), "codename REDACTION-1\n");
+    assert_eq!(stdout(&out), "codename [REDACTED-1]\n");
 
     let both = write_config(
         dir.path(),
@@ -556,13 +556,13 @@ fn value_and_regex_rules() {
         "allow:\n  regexes: ['ACME-1234']\n",
     );
     let out = redact(&["--config", &both], "ACME-1234 and ACME-9999\n");
-    // An allowed secret still takes an id, so the next one is REDACTION-2.
-    assert_eq!(stdout(&out), "ACME-1234 and REDACTION-2\n");
+    // An allowed secret still takes an id, so the next one is [REDACTED-2].
+    assert_eq!(stdout(&out), "ACME-1234 and [REDACTED-2]\n");
 
     // An allow pattern must match the whole secret.
     let partial = rules_config(dir.path(), "allow:\n  regexes: ['sk-ant']\n");
     let out = redact(&["--config", &partial], &format!("x {S}\n"));
-    assert_eq!(stdout(&out), "x REDACTION-1\n");
+    assert_eq!(stdout(&out), "x [REDACTED-1]\n");
 }
 
 #[test]
@@ -575,7 +575,7 @@ fn rule_lists_take_several_entries() {
     let out = redact(&["--config", &config], "alpha beta gamma A-11 B-22 C-33\n");
     assert_eq!(
         stdout(&out),
-        "REDACTION-1 beta REDACTION-2 REDACTION-3 B-22 REDACTION-4\n"
+        "[REDACTED-1] beta [REDACTED-2] [REDACTED-3] B-22 [REDACTED-4]\n"
     );
 
     let doc = r#"{"a":"1","b":"2","c":"3"}"#;
@@ -583,7 +583,7 @@ fn rule_lists_take_several_entries() {
     let out = redact(&["-f", "json", "--config", &paths], doc);
     assert_eq!(
         stdout(&out),
-        r#"{"a":"REDACTION-1","b":"2","c":"REDACTION-2"}"#
+        r#"{"a":"[REDACTED-1]","b":"2","c":"[REDACTED-2]"}"#
     );
 
     let spared = write_config(
@@ -592,7 +592,7 @@ fn rule_lists_take_several_entries() {
         "allow:\n  paths: [a, c]\n",
     );
     let out = redact(&["-f", "json", "--config", &spared], doc);
-    assert_eq!(stdout(&out), r#"{"a":"1","b":"REDACTION-1","c":"3"}"#);
+    assert_eq!(stdout(&out), r#"{"a":"1","b":"[REDACTED-1]","c":"3"}"#);
 }
 
 /// There is no switch for turning a detector off: the `detectors` list is
@@ -604,13 +604,13 @@ fn a_detector_that_is_not_listed_does_not_run() {
 
     // The shipped file lists no personal-data detector, so the address stays.
     let out = redact(&[], &input);
-    assert_eq!(stdout(&out), "REDACTION-1 jane@corp.example\n");
+    assert_eq!(stdout(&out), "[REDACTED-1] jane@corp.example\n");
 
     // Uncommenting the `pii:` block is all it takes to switch it on.
     let with_pii = pii_config(dir.path());
     let out = redact(&["--config", &with_pii], &input);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "REDACTION-1 REDACTION-2\n");
+    assert_eq!(stdout(&out), "[REDACTED-1] [REDACTED-2]\n");
 
     // A detector name the crate does not know is an error, not a no-op.
     let unknown = write_config(
@@ -649,7 +649,7 @@ fn config_replaces_the_builtin_rules() {
     assert_eq!(
         stdout(&out),
         format!(
-            "{{\n  // ref REDACTION-1\n  \"customer\": \"REDACTION-2\",\n  \"build\": {{\"k\": \"{S}\"}}\n}}"
+            "{{\n  // ref [REDACTED-1]\n  \"customer\": \"[REDACTED-2]\",\n  \"build\": {{\"k\": \"{S}\"}}\n}}"
         )
     );
 }
@@ -707,7 +707,7 @@ fn config_resolves_rule_paths_relative_to_itself() {
         })
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "ref REDACTION-1\n");
+    assert_eq!(stdout(&out), "ref [REDACTED-1]\n");
 }
 
 #[test]
@@ -818,7 +818,7 @@ fn redact_reads_the_config_environment() {
     let flag = rules_config(flag_dir.path(), "allow:\n  values: []\n");
     let out = velociredactor_with(&["redact", "--config", &flag], input, Some(&env_config));
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "DB_PASSWORD=REDACTION-1\n");
+    assert_eq!(stdout(&out), "DB_PASSWORD=[REDACTED-1]\n");
 }
 
 #[test]
@@ -1003,7 +1003,7 @@ fn skipped_keys_are_configuration() {
     );
     let out = redact(&["-f", "json", "--config", &reachable], input);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), r#"{"session_id":"REDACTION-1"}"#);
+    assert_eq!(stdout(&out), r#"{"session_id":"[REDACTED-1]"}"#);
 }
 
 /// A scratch git repository holding a `.env` and a source file.
@@ -1080,7 +1080,7 @@ fn agent_init_writes_a_complete_configuration() {
 
     // Redaction is unchanged by the new section.
     let out = velociredactor_in(dir.path(), dir.path(), &["redact", ".env"], "");
-    assert_eq!(stdout(&out), "DB_PASSWORD=REDACTION-1\n");
+    assert_eq!(stdout(&out), "DB_PASSWORD=[REDACTED-1]\n");
 
     let out = velociredactor_in(dir.path(), dir.path(), &["config", "validate"], "");
     assert!(out.status.success(), "{}", stderr(&out));
@@ -1351,7 +1351,7 @@ fn grep_prints_matches_from_redacted_text() {
     assert_eq!(
         stdout(&out),
         "sub/config.yml-2-  host: prod.internal\n\
-         sub/config.yml:3:  api_key: \"REDACTION-1\"\n\
+         sub/config.yml:3:  api_key: \"[REDACTED-1]\"\n\
          sub/config.yml-4-  user: admin\n"
     );
 }
@@ -1383,7 +1383,7 @@ fn grep_output_never_holds_a_secret() {
         assert!(out.status.success(), "{args:?}: {}", stderr(&out));
         let text = stdout(&out);
         assert!(!text.contains(S), "{args:?}: {text}");
-        assert!(text.contains("REDACTION-1"), "{args:?}: {text}");
+        assert!(text.contains("[REDACTED-1]"), "{args:?}: {text}");
     }
 }
 
@@ -1425,7 +1425,7 @@ fn grep_honors_ignore_files_and_hidden_files() {
 fn grep_reads_standard_input() {
     let out = velociredactor(&["grep", "token", "-"], &format!("token: {S}\nother\n"));
     assert!(out.status.success(), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "1:token: REDACTION-1\n");
+    assert_eq!(stdout(&out), "1:token: [REDACTED-1]\n");
 }
 
 #[test]
@@ -1487,7 +1487,7 @@ fn grep_redacts_each_file_by_its_own_configuration() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        format!("secret.txt:1:api_key: \"REDACTION-1\"\nsub/config.yml:3:  api_key: \"{S}\"\n")
+        format!("secret.txt:1:api_key: \"[REDACTED-1]\"\nsub/config.yml:3:  api_key: \"{S}\"\n")
     );
 }
 
@@ -1499,7 +1499,7 @@ fn grep_prints_files_in_path_order() {
     for i in 0..300 {
         let name = format!("f{i:03}.env");
         fs::write(dir.path().join(&name), format!("KEY={S}\nline {i}\n")).unwrap();
-        want.push_str(&format!("{name}:1:KEY=REDACTION-1\n{name}-2-line {i}\n"));
+        want.push_str(&format!("{name}:1:KEY=[REDACTED-1]\n{name}-2-line {i}\n"));
         if i < 299 {
             want.push_str("--\n");
         }
@@ -1606,10 +1606,7 @@ fn agent_skill_prints_the_skills() {
     // A skill's references come after it.
     let config = stdout(&skill(&["config"]));
     assert!(config.starts_with(include_str!("../skills/velociredactor-config/SKILL.md")));
-    assert!(
-        config.contains("# veloci.yml reference"),
-        "{config}"
-    );
+    assert!(config.contains("# veloci.yml reference"), "{config}");
 
     let out = skill(&["nope"]);
     assert_eq!(out.status.code(), Some(2));
@@ -1892,11 +1889,7 @@ fn scan_fails_on_a_broken_configuration() {
     fs::write(dir.path().join("veloci.yml"), "detectors: [\n").unwrap();
     let out = scan_in(dir.path(), &[]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(
-        stderr(&out).contains("veloci.yml"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("veloci.yml"), "{}", stderr(&out));
 }
 
 #[test]
@@ -2020,11 +2013,7 @@ fn agent_status_leaves_out_the_privacy_filter_model() {
         "",
     );
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(
-        stderr(&out).contains("veloci.yml"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("veloci.yml"), "{}", stderr(&out));
 
     // An explicit scan runs every detector the configuration enables.
     assert_eq!(scan_in(dir.path(), &[]).status.code(), Some(2));

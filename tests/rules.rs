@@ -64,8 +64,8 @@ fn disallowed_paths_redact_whatever_the_value_holds() {
         DOC,
     );
     let out = render(&redaction, &Allow::none());
-    assert!(out.contains(r#""name": "REDACTION-1""#), "{out}");
-    assert!(out.contains(r#""ssn": "REDACTION-2""#), "{out}");
+    assert!(out.contains(r#""name": "[REDACTED-1]""#), "{out}");
+    assert!(out.contains(r#""ssn": "[REDACTED-2]""#), "{out}");
     // Array nesting adds nothing to a key path.
     assert_eq!(tokens_of(&redaction, "path").len(), 2);
     assert_eq!(
@@ -81,14 +81,14 @@ fn path_globs_span_keys_and_segments() {
         Redactor::builder().detector(PathDetector::new(["**.ssn"])),
         DOC,
     );
-    assert!(out.contains(r#""ssn": "REDACTION-1""#), "{out}");
+    assert!(out.contains(r#""ssn": "[REDACTED-1]""#), "{out}");
     assert!(out.contains(r#""name": "Jane Roe""#), "{out}");
 
     let out = redact(
         Redactor::builder().detector(PathDetector::new(["db.*"])),
         DOC,
     );
-    assert!(out.contains(r#""host": "REDACTION-1""#), "{out}");
+    assert!(out.contains(r#""host": "[REDACTED-1]""#), "{out}");
     assert!(out.contains(r#""name": "Jane Roe""#), "{out}");
 
     // A single star stays inside one segment.
@@ -104,7 +104,7 @@ fn allowed_paths_are_never_scanned() {
     let out = render(&redaction, &Allow::none());
     assert_eq!(
         out,
-        format!(r#"{{"keep": {{"api_key": "{S}"}}, "other": "REDACTION-1"}}"#),
+        format!(r#"{{"keep": {{"api_key": "{S}"}}, "other": "[REDACTED-1]"}}"#),
         "a secret at an allowed path survives even where the same value is redacted elsewhere"
     );
     assert_eq!(
@@ -142,7 +142,7 @@ fn allowed_within_spares_a_secret_by_its_surroundings() {
     let out = render(&redaction, &Allow::none());
     assert_eq!(
         out,
-        format!(r#"{{"css": "src: url({FONT_URL}) format('woff2')", "other": "REDACTION-1"}}"#),
+        format!(r#"{{"css": "src: url({FONT_URL}) format('woff2')", "other": "[REDACTED-1]"}}"#),
         "only the occurrence inside the URL survives"
     );
     assert_eq!(
@@ -158,7 +158,7 @@ fn allowed_within_does_not_spare_a_secret_reaching_past_the_match() {
     let builder = || Redactor::builder().detector(RegexDetector::new("regex", "abc123").unwrap());
 
     let out = redact(builder().allow_within(["keep:abc"]).unwrap(), doc);
-    assert_eq!(out, r#"{"a": "keep:REDACTION-1"}"#);
+    assert_eq!(out, r#"{"a": "keep:[REDACTED-1]"}"#);
 
     let out = redact(builder().allow_within(["keep:abc123"]).unwrap(), doc);
     assert_eq!(out, doc);
@@ -219,8 +219,8 @@ fn disallowed_values_and_patterns_are_reported_by_their_own_detectors() {
     assert_eq!(tokens_of(&redaction, "regex").len(), 1);
 
     let out = render(&redaction, &Allow::none());
-    assert!(out.contains(r#""name": "REDACTION-1""#), "{out}");
-    assert!(out.contains(r#""ssn": "REDACTION-2""#), "{out}");
+    assert!(out.contains(r#""name": "[REDACTED-1]""#), "{out}");
+    assert!(out.contains(r#""ssn": "[REDACTED-2]""#), "{out}");
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn a_disallowed_value_is_redacted_wherever_it_appears() {
     );
     assert_eq!(
         out,
-        r#"{"a": "REDACTION-1 corp", "b": "at REDACTION-1", "c": "ok"}"#
+        r#"{"a": "[REDACTED-1] corp", "b": "at [REDACTED-1]", "c": "ok"}"#
     );
 }
 
@@ -272,14 +272,14 @@ fn only_the_configured_detectors_run() {
     let both = configured(&["entropy", "ruleset"]);
     assert_eq!(
         redact_with(&both, &doc),
-        r#"{"api_key": "REDACTION-1", "mail": "REDACTION-2"}"#
+        r#"{"api_key": "[REDACTED-1]", "mail": "[REDACTED-2]"}"#
     );
 
     // Without entropy the key survives: no bundled rule knows its shape.
     let no_entropy = configured(&["ruleset"]);
     assert_eq!(
         redact_with(&no_entropy, &doc),
-        format!(r#"{{"api_key": "{S}", "mail": "REDACTION-1"}}"#)
+        format!(r#"{{"api_key": "{S}", "mail": "[REDACTED-1]"}}"#)
     );
 
     let mut none = Config::builtin().clone();
@@ -340,7 +340,7 @@ fn ruleset_rules_can_be_excluded_by_id() {
     let mut config = Config::builtin().clone();
     config.detectors.retain(|d| d.name() == "ruleset");
     let ruleset = config.redactor().expect("valid configuration").0;
-    assert_eq!(redact_with(&ruleset, &doc), r#"{"note": "REDACTION-1"}"#);
+    assert_eq!(redact_with(&ruleset, &doc), r#"{"note": "[REDACTED-1]"}"#);
 
     for detector in &mut config.detectors {
         if let DetectorConfig::Ruleset(ruleset) = detector {
@@ -360,7 +360,7 @@ fn the_bundled_ruleset_is_a_detector_like_any_other() {
     let rules: RulesetDetector = BETTERLEAKS_RULESET.clone();
     assert_eq!(
         redact_with(&Redactor::builder().detector(rules.clone()).build(), &doc),
-        r#"{"note": "REDACTION-1"}"#
+        r#"{"note": "[REDACTED-1]"}"#
     );
 
     let excluded = rules.exclude_rules(["github-pat"]);
@@ -382,7 +382,7 @@ fn plain_text_values_have_no_path() {
     assert_eq!(redaction.findings()[0].path, None);
     assert_eq!(
         render(&redaction, &Allow::none()),
-        "REDACTION-1",
+        "[REDACTED-1]",
         "`**` matches the empty path of a plain-text document"
     );
 }

@@ -15,4 +15,6 @@ mod render;
 pub use error::{Error, FormatError};
 pub use glob::Glob;
 pub use redactor::{Finding, FormatHint, Redaction, Redactor, RedactorBuilder};
-pub use render::{Allow, TOKEN_PREFIX, find_tokens, is_redaction_token, token};
+pub use render::{
+    Allow, DEFAULT_REPLACEMENT, ReplacementFormat, find_tokens, is_redaction_token, token,
+};

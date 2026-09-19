@@ -10,7 +10,7 @@ use velociredactor::detect::{
 };
 use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 use velociredactor::policy::ScanAll;
-use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder};
+use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder, ReplacementFormat};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
@@ -29,13 +29,45 @@ fn token_format() {
         .unwrap();
     let finding = &redaction.findings()[0];
     assert_eq!(finding.id, 1);
-    assert_eq!(finding.token(), "REDACTION-1");
+    assert_eq!(finding.token(), "[REDACTED-1]");
     assert_eq!(finding.len, 7);
     assert_eq!(finding.detector, "credential_assignment");
     assert_eq!(
         String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
-        "export DB_PASSWORD=REDACTION-1"
+        "export DB_PASSWORD=[REDACTED-1]"
     );
+}
+
+#[test]
+fn a_custom_replacement_format_is_wired_through_the_builder() {
+    let format = ReplacementFormat::parse("[REDACTED-{n}:{reason}]").unwrap();
+    let redactor = Redactor::builder().replacement(format.clone()).build();
+    assert_eq!(redactor.replacement(), &format);
+
+    let redaction = redactor
+        .redact(b"export DB_PASSWORD=hunter2", FormatHint::Name("text"))
+        .unwrap();
+    let finding = &redaction.findings()[0];
+    assert_eq!(finding.token(), "[REDACTED-1:credential_assignment]");
+    assert_eq!(
+        String::from_utf8(redaction.render(&Allow::none()).unwrap()).unwrap(),
+        "export DB_PASSWORD=[REDACTED-1:credential_assignment]"
+    );
+}
+
+#[test]
+fn a_reason_format_rejects_detector_labels_it_cannot_recognize() {
+    let format = ReplacementFormat::parse("[REDACTED-{n}:{reason}]").unwrap();
+    let redactor = RedactorBuilder::new()
+        .detector(RegexDetector::new("bad label", "secret").unwrap())
+        .replacement(format)
+        .build();
+    let err = redactor
+        .redact(b"secret", FormatHint::Raw)
+        .err()
+        .expect("the invalid reason must fail")
+        .to_string();
+    assert!(err.contains("reason"), "{err}");
 }
 
 #[test]
@@ -47,7 +79,7 @@ fn len_counts_bytes() {
         .redact("a café".as_bytes(), FormatHint::Name("text"))
         .unwrap();
     assert_eq!(redaction.findings()[0].len, 5);
-    assert_eq!(redactor.redact_str("a café"), "a REDACTION-1");
+    assert_eq!(redactor.redact_str("a café"), "a [REDACTED-1]");
 }
 
 #[test]
@@ -66,7 +98,7 @@ fn equal_values_share_an_id() {
     assert_eq!(findings[0].offsets, [14, 84]);
     assert_eq!(
         rendered(&redaction, &Allow::none()),
-        "a DB_PASSWORD=REDACTION-1 b REDACTION-2 c DB_PASSWORD=REDACTION-1 d REDACTION-2"
+        "a DB_PASSWORD=[REDACTED-1] b [REDACTED-2] c DB_PASSWORD=[REDACTED-1] d [REDACTED-2]"
     );
 }
 
@@ -80,16 +112,16 @@ fn allow_by_value() {
         .unwrap();
     assert_eq!(
         rendered(&redaction, &Allow::none()),
-        "one DB_PASSWORD=REDACTION-1\ntwo REDACTION-2\nthree REDACTION-3\n"
+        "one DB_PASSWORD=[REDACTED-1]\ntwo [REDACTED-2]\nthree [REDACTED-3]\n"
     );
 
     assert_eq!(
         rendered(&redaction, &Allow::values([S])),
-        format!("one DB_PASSWORD=REDACTION-1\ntwo {S}\nthree REDACTION-3\n")
+        format!("one DB_PASSWORD=[REDACTED-1]\ntwo {S}\nthree [REDACTED-3]\n")
     );
     assert_eq!(
         rendered(&redaction, &Allow::values(["hunter2"])),
-        format!("one DB_PASSWORD=hunter2\ntwo REDACTION-2\nthree REDACTION-3\n")
+        format!("one DB_PASSWORD=hunter2\ntwo [REDACTED-2]\nthree [REDACTED-3]\n")
     );
 
     let all = Allow::values(redaction.findings().iter().map(|f| f.secret.clone()));
@@ -134,7 +166,7 @@ fn inline_custom_rules() {
         .build();
     assert_eq!(
         redactor.redact_str("token ACME_AB12CD34 here"),
-        "token REDACTION-1 here"
+        "token [REDACTED-1] here"
     );
     // Without the rule the low-entropy token is left alone.
     assert_eq!(text("token ACME_AB12CD34 here"), "token ACME_AB12CD34 here");
@@ -163,7 +195,7 @@ fn entropy_thresholds_live_on_the_detector() {
     let lowered = config.redactor().expect("valid configuration").0;
     assert_eq!(
         render(&lowered, input, "json", &Allow::none()),
-        r#"{"api_key":"REDACTION-1"}"#
+        r#"{"api_key":"[REDACTED-1]"}"#
     );
 }
 
@@ -175,7 +207,7 @@ fn scan_all_policy_scans_skipped_keys() {
     let scan_all = Redactor::builder().policy(ScanAll).build();
     assert_eq!(
         render(&scan_all, &input, "json", &Allow::none()),
-        r#"{"session_id":"REDACTION-1"}"#
+        r#"{"session_id":"[REDACTED-1]"}"#
     );
 }
 
@@ -189,7 +221,7 @@ fn raw_skips_format_detection() {
     assert_eq!(auto.format(), "json");
     assert_eq!(
         rendered(&auto, &Allow::none()),
-        format!(r#"{{"token":"REDACTION-1","session_id":"{S}"}}"#)
+        format!(r#"{{"token":"[REDACTED-1]","session_id":"{S}"}}"#)
     );
 
     let raw = redactor()
@@ -199,7 +231,7 @@ fn raw_skips_format_detection() {
     assert!(raw.warnings().is_empty());
     assert_eq!(
         rendered(&raw, &Allow::none()),
-        r#"{"token":"REDACTION-1","session_id":"REDACTION-1"}"#
+        r#"{"token":"[REDACTED-1]","session_id":"[REDACTED-1]"}"#
     );
 }
 
@@ -266,7 +298,7 @@ fn document_scoped_detectors_see_the_whole_document() {
     );
     assert_eq!(
         out,
-        r#"{"a":"one REDACTION-1","b":"flag","c":"REDACTION-2","d":{"e":"REDACTION-3"}}"#
+        r#"{"a":"one [REDACTED-1]","b":"flag","c":"[REDACTED-2]","d":{"e":"[REDACTED-3]"}}"#
     );
 }
 
@@ -364,7 +396,7 @@ fn user_defined_format_and_detector() {
     assert_eq!(redaction.format(), "colon");
     assert_eq!(
         rendered(&redaction, &Allow::none()),
-        "banana: REDACTION-1 split\nid: banana\n"
+        "banana: [REDACTED-1] split\nid: banana\n"
     );
 }
 

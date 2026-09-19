@@ -23,7 +23,7 @@ use crate::util::{
 
 /// Redact secrets and personal data from files.
 ///
-/// Each redacted value becomes a token `REDACTION-N`, where `N` numbers distinct secrets in order of first appearance.
+/// Each redacted value becomes a token `[REDACTED-N]`, where `N` numbers distinct secrets in order of first appearance.
 /// Equal values share a number.
 ///
 /// Configuration defines what counts as a secret.
@@ -750,7 +750,7 @@ fn hook_denial(args: &ConfigArg) -> Result<Option<String>> {
         return Ok(Some(format!(
             "{shown} is protected by Veloci Redactor. Read it with \
              `veloci redact {}` instead; redacted values appear as \
-             REDACTION-N tokens.",
+             [REDACTED-N] tokens.",
             shell_quote(&shown),
         )));
     }
@@ -1229,7 +1229,7 @@ fn print_table(
         .iter()
         .map(|f| {
             let mut row = vec![
-                f.token(),
+                f.token().to_owned(),
                 f.detector.clone(),
                 f.offset().map_or_else(|| "-".into(), |o| o.to_string()),
                 f.len.to_string(),

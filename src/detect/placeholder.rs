@@ -5,8 +5,8 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::Error;
+use crate::ReplacementFormat;
 use crate::config::Config;
-use crate::render::is_redaction_token;
 
 /// Lowercase words joined by `-` or `_`. Digits, capitals, and other
 /// characters are excluded so `<hunter2>` or `<RealPassword>` still count as
@@ -33,18 +33,19 @@ pub struct PlaceholderConfig {
 /// according to the configuration built into the binary.
 ///
 /// Recognizes empty values, earlier redactions (including this crate's
-/// `REDACTION-N` tokens), common documentation placeholders such as
+/// `[REDACTED-N]` tokens), common documentation placeholders such as
 /// `changeme` or `<password>`, `${VAR}` expansions, and masks such as `****`.
 pub fn is_placeholder(value: &str) -> bool {
     Placeholders::builtin().is_placeholder(value)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Compiled {
     values: HashSet<String>,
     mask_characters: Vec<u8>,
     mask_min_length: usize,
     bracket_min_length: usize,
+    replacement: ReplacementFormat,
 }
 
 /// A compiled placeholder vocabulary. Cloning is cheap.
@@ -72,8 +73,15 @@ impl Placeholders {
                 mask_characters: config.mask_characters.bytes().collect(),
                 mask_min_length: config.mask_min_length,
                 bracket_min_length: config.bracket_min_length,
+                replacement: ReplacementFormat::default(),
             }),
         })
+    }
+
+    /// Treat tokens of `replacement` as earlier redactions, not secrets.
+    pub fn with_replacement(mut self, replacement: ReplacementFormat) -> Self {
+        Arc::make_mut(&mut self.inner).replacement = replacement;
+        self
     }
 
     /// The vocabulary from the configuration built into the binary.
@@ -81,6 +89,7 @@ impl Placeholders {
         static PLACEHOLDERS: LazyLock<Placeholders> = LazyLock::new(|| {
             Placeholders::new(&Config::builtin().placeholder)
                 .expect("the built-in configuration is valid")
+                .with_replacement(Config::builtin().replacement.clone())
         });
         &PLACEHOLDERS
     }
@@ -88,7 +97,10 @@ impl Placeholders {
     /// Whether a credential-shaped value is obviously not a real secret.
     pub fn is_placeholder(&self, value: &str) -> bool {
         let trimmed = value.trim().trim_matches(['"', '\'']);
-        if trimmed.is_empty() || self.is_bracketed(trimmed) || is_redaction_token(trimmed) {
+        if trimmed.is_empty()
+            || self.is_bracketed(trimmed)
+            || self.inner.replacement.is_token(trimmed)
+        {
             return true;
         }
         // Both tests below see the lowercased value, which is why `XXXX` is a
@@ -160,8 +172,8 @@ mod tests {
             "REDACTED",
             "[REDACTED]",
             "<redacted>",
-            "REDACTION-1",
-            "REDACTION-12",
+            "[REDACTED-1]",
+            "[REDACTED-12]",
             "changeme",
             "'changeme'",
             "\"example\"",
@@ -192,8 +204,8 @@ mod tests {
             "**",
             "x",
             "xxy",
-            "REDACTION-0",
-            "xREDACTION-1",
+            "[REDACTED-0]",
+            "x[REDACTED-1]",
             "[REDACTION|entropy|3|abc]",
             "s3cr3t-value",
         ] {

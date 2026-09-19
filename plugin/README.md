@@ -1,10 +1,10 @@
 # Veloci Redactor agent skills
 
-These skills make AI coding agents read and search sensitive files through `veloci`. Secrets and personal data are replaced by `REDACTION-N` tokens before they reach the model.
+These skills make AI coding agents read and search sensitive files through `veloci`. Secrets and personal data are replaced by `[REDACTED-N]` tokens before they reach the model.
 
 | Skill | What it does |
 |---|---|
-| [`velociredactor`](skills/velociredactor/SKILL.md) | Reads protected or sensitive files with `veloci redact`, searches them with `veloci grep`, and edits them without ever writing a `REDACTION-N` token back. |
+| [`velociredactor`](skills/velociredactor/SKILL.md) | Reads protected or sensitive files with `veloci redact`, searches them with `veloci grep`, and edits them without ever writing a `[REDACTED-N]` token back. |
 | [`velociredactor-setup`](skills/velociredactor-setup/SKILL.md) | On first use in a project, asks which files to protect and records the answer in `veloci.yml`. |
 | [`velociredactor-config`](skills/velociredactor-config/SKILL.md) | Customizes detection: allow lists, custom patterns, PII, the Privacy Filter model, and the protected files. |
 | [`velociredactor-share`](skills/velociredactor-share/SKILL.md) | Redacts logs and other output before they go into issues, pull requests, chat or web tools. |

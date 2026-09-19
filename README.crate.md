@@ -4,7 +4,7 @@
 
 Veloci Redactor (`velociredactor`) is a Rust library for redacting secrets and personal data from text and structured files.
 
-Each redacted value becomes a token named `REDACTION-N`. `N` numbers distinct secrets in order of first appearance, and equal values share a number. Exact values and regular expressions can allow confirmed false positives.
+Each redacted value becomes a token named `[REDACTED-N]`. `N` numbers distinct secrets in order of first appearance, and equal values share a number. The token format is configurable: `{n}` is that number and `{reason}` is the detector that found the secret. Exact values and regular expressions can allow confirmed false positives.
 
 Structured format support preserves keys and formatting while replacing values. Comment scanning is configurable. Raw mode treats the complete input as plain text.
 
@@ -29,12 +29,12 @@ let input = br#"{"db_password": "hunter2", "note": "hello"}"#;
 
 let redaction = redactor.redact(input, FormatHint::Name("json")).unwrap();
 assert_eq!(redaction.findings()[0].id, 1);
-assert_eq!(redaction.findings()[0].token(), "REDACTION-1");
+assert_eq!(redaction.findings()[0].token(), "[REDACTED-1]");
 
 let output = redaction.render(&Allow::none()).unwrap();
 assert_eq!(
     output,
-    br#"{"db_password": "REDACTION-1", "note": "hello"}"#
+    br#"{"db_password": "[REDACTED-1]", "note": "hello"}"#
 );
 
 // Render the same findings again while allowing that value through.
@@ -51,7 +51,7 @@ Configuration defines the values to scan, documentation placeholders, active det
 
 A configuration loaded from a file replaces the built-in configuration completely. Start a custom configuration from [`Config::builtin_source`](config::Config::builtin_source).
 
-[`RedactorBuilder::new`] creates an empty builder. [`Redactor::builder`] creates a builder with the built-in detectors, formats, and policy.
+[`RedactorBuilder::new`] creates an empty builder. [`Redactor::builder`] creates a builder with the built-in detectors, formats, and policy. [`RedactorBuilder::replacement`] sets the token format; [`ReplacementFormat`] parses a string with `{n}` and `{reason}`.
 
 ## Formats
 

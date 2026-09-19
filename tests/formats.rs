@@ -51,27 +51,27 @@ second: {S}
     );
     let want = r#"# deployment settings
 service: api   # trailing comment
-token: "REDACTION-1"
-quoted: "prefix REDACTION-1 suffix"
-single: 'it''s REDACTION-1'
+token: "[REDACTED-1]"
+quoted: "prefix [REDACTED-1] suffix"
+single: 'it''s [REDACTED-1]'
 list:
   - plain
-  - "REDACTION-1"
-flow: [a, "REDACTION-1"]
+  - "[REDACTED-1]"
+flow: [a, "[REDACTED-1]"]
 db:
   host: db.example.com
   user: svc
-  password: "REDACTION-2"
+  password: "[REDACTED-2]"
 session_id: sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA
 block: |
   first line
-  key REDACTION-1
+  key [REDACTED-1]
   last line
 folded: >-
   some folded
-  text REDACTION-1
+  text [REDACTED-1]
 ---
-second: "REDACTION-1"
+second: "[REDACTED-1]"
 "#;
     let got = as_format("yaml", &input);
     assert_eq!(got, want);
@@ -87,11 +87,17 @@ second: "REDACTION-1"
         .map(|doc| serde::Deserialize::deserialize(doc).unwrap())
         .collect();
     let token = docs[0]["token"].as_str().unwrap();
-    assert!(velociredactor::is_redaction_token(token), "{token}");
+    let replacement = redactor().replacement();
+    assert!(
+        velociredactor::is_redaction_token(replacement, token),
+        "{token}"
+    );
     assert!(velociredactor::is_redaction_token(
+        replacement,
         docs[0]["flow"][1].as_str().unwrap()
     ));
     assert!(velociredactor::is_redaction_token(
+        replacement,
         docs[1]["second"].as_str().unwrap()
     ));
     unchanged_without_secrets("yaml", "a: 1\nb: [x, y]\nc: {d: e}\n");
@@ -101,7 +107,7 @@ second: "REDACTION-1"
 fn yaml_escaped_scalar_is_requoted() {
     let input = format!("key: \"\\x41{}\"\n", &S[1..]);
     let got = as_format("yaml", &input);
-    assert_eq!(got, "key: \"REDACTION-1\"\n");
+    assert_eq!(got, "key: \"[REDACTED-1]\"\n");
 }
 
 #[test]
@@ -110,7 +116,7 @@ fn yaml_multiline_secret_in_block_scalar_is_rewritten_as_block() {
     let indented = key.replace('\n', "\n  ");
     let input = format!("key: |\n  {indented}\nnext: ok\n");
     let got = as_format("yaml", &input);
-    assert_eq!(got, "key: |\n  REDACTION-1\nnext: ok\n");
+    assert_eq!(got, "key: |\n  [REDACTED-1]\nnext: ok\n");
 }
 
 #[test]
@@ -118,7 +124,7 @@ fn yaml_non_ascii_offsets() {
     let input = format!("naïve: \"café {S}\"\nnext: é\n");
     assert_eq!(
         as_format("yaml", &input),
-        "naïve: \"café REDACTION-1\"\nnext: é\n"
+        "naïve: \"café [REDACTED-1]\"\nnext: é\n"
     );
 }
 
@@ -147,22 +153,22 @@ url = "postgres://app:pwd123@db.example.com/app"
     );
     let want = r#"# settings
 title = "demo"   # comment
-token = "REDACTION-1"
-literal = 'REDACTION-1'
+token = "[REDACTED-1]"
+literal = '[REDACTED-1]'
 multi = """
-line REDACTION-1
+line [REDACTED-1]
 """
 nums = [1, 2]
-list = ["ok", "REDACTION-1"]
-inline = { key = "REDACTION-1", id = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA" }
+list = ["ok", "[REDACTED-1]"]
+inline = { key = "[REDACTED-1]", id = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA" }
 
 [database]
 host = "db.example.com"
 user = "svc"
-password = "REDACTION-2"
+password = "[REDACTED-2]"
 
 [[servers]]
-url = "REDACTION-3"
+url = "[REDACTED-3]"
 "#;
     check("toml", &input, want);
     want.parse::<toml_edit::DocumentMut>().unwrap();
@@ -172,7 +178,7 @@ url = "REDACTION-3"
 #[test]
 fn toml_escaped_value_is_requoted() {
     let input = format!("key = \"\\u0073{}\"\n", &S[1..]);
-    assert_eq!(as_format("toml", &input), "key = \"REDACTION-1\"\n");
+    assert_eq!(as_format("toml", &input), "key = \"[REDACTED-1]\"\n");
 }
 
 #[test]
@@ -196,12 +202,12 @@ fn xml() {
 <!-- config -->
 <configuration>
   <appSettings>
-    <add key="ApiKey" value="REDACTION-1" />
+    <add key="ApiKey" value="[REDACTED-1]" />
     <add key="Mode" value='fast' />
   </appSettings>
-  <token>REDACTION-1</token>
-  <note>fish &amp; chips REDACTION-1</note>
-  <data><![CDATA[secret: REDACTION-1]]></data>
+  <token>[REDACTED-1]</token>
+  <note>fish &amp; chips [REDACTED-1]</note>
+  <data><![CDATA[secret: [REDACTED-1]]]></data>
   <id>sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA</id>
 </configuration>
 "#;
@@ -231,7 +237,7 @@ fn xml_plist_keys() {
     let got = as_format("xml", input);
     assert_eq!(
         got,
-        input.replace("<string>hunter3</string>", "<string>REDACTION-1</string>")
+        input.replace("<string>hunter3</string>", "<string>[REDACTED-1]</string>")
     );
 }
 
@@ -273,8 +279,8 @@ EOT
 "#
     );
     let got = as_format("hcl", &input);
-    let want = input.replace(S, "REDACTION-1");
-    let want = want.replace("id = \"REDACTION-1\"", &format!("id = \"{S}\""));
+    let want = input.replace(S, "[REDACTED-1]");
+    let want = want.replace("id = \"[REDACTED-1]\"", &format!("id = \"{S}\""));
     assert_eq!(got, want);
     hcl_edit::parser::parse_body(&got).unwrap();
     unchanged_without_secrets("hcl", "a = \"b\"\nblock \"x\" {\n  c = [1, 2]\n}\n");
@@ -285,7 +291,7 @@ fn hcl_credential_context() {
     let input = "db {\n  host = \"h\"\n  user = \"u\"\n  password = \"correct-horse\"\n}\n";
     assert_eq!(
         as_format("hcl", input),
-        "db {\n  host = \"h\"\n  user = \"u\"\n  password = \"REDACTION-1\"\n}\n"
+        "db {\n  host = \"h\"\n  user = \"u\"\n  password = \"[REDACTED-1]\"\n}\n"
     );
 }
 
@@ -294,7 +300,7 @@ fn ini() {
     let input = format!(
         "; comment\nglobal = 1\n\n[client]\nhost = db.example.com\nuser = svc\npassword = \"hunter2\"\n\n[registry]\n//registry.npmjs.org/:_authToken={S}\nsession_id = {S}\nweird line {S}\n"
     );
-    let want = "; comment\nglobal = 1\n\n[client]\nhost = db.example.com\nuser = svc\npassword = \"REDACTION-1\"\n\n[registry]\n//registry.npmjs.org/:_authToken=REDACTION-2\nsession_id = sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA\nweird line REDACTION-2\n";
+    let want = "; comment\nglobal = 1\n\n[client]\nhost = db.example.com\nuser = svc\npassword = \"[REDACTED-1]\"\n\n[registry]\n//registry.npmjs.org/:_authToken=[REDACTED-2]\nsession_id = sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA\nweird line [REDACTED-2]\n";
     check("ini", &input, want);
     unchanged_without_secrets("ini", "[a]\nb = c\n");
 }
@@ -304,7 +310,7 @@ fn dotenv() {
     let input = format!(
         "# env\nexport API_KEY={S}\nDB_PASSWORD='hunter2'\nHOME_DIR=${{HOME}}/app\nQUOTED=\"{S}\"\n"
     );
-    let want = "# env\nexport API_KEY=REDACTION-1\nDB_PASSWORD='REDACTION-2'\nHOME_DIR=${HOME}/app\nQUOTED=\"REDACTION-1\"\n";
+    let want = "# env\nexport API_KEY=[REDACTED-1]\nDB_PASSWORD='[REDACTED-2]'\nHOME_DIR=${HOME}/app\nQUOTED=\"[REDACTED-1]\"\n";
     check("dotenv", &input, want);
 }
 
@@ -314,7 +320,7 @@ fn dotenv_hex_digest_on_api_key() {
     check(
         "dotenv",
         &format!("API_KEY={hex}\n"),
-        "API_KEY=REDACTION-1\n",
+        "API_KEY=[REDACTED-1]\n",
     );
     check("dotenv", &format!("NOTE={hex}\n"), &format!("NOTE={hex}\n"));
 }
@@ -339,7 +345,7 @@ fn properties() {
     let input = format!(
         "# app\napp.name = demo\ndb.password = hunter2\napi.key: {S}\nmultiline = first \\\n    {S}\nuser.id={S}\n"
     );
-    let want = "# app\napp.name = demo\ndb.password = REDACTION-1\napi.key: REDACTION-2\nmultiline = first \\\n    REDACTION-2\nuser.id=sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA\n";
+    let want = "# app\napp.name = demo\ndb.password = [REDACTED-1]\napi.key: [REDACTED-2]\nmultiline = first \\\n    [REDACTED-2]\nuser.id=sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA\n";
     check("properties", &input, want);
 }
 
@@ -348,20 +354,20 @@ fn csv() {
     let input = format!(
         "name,token,user_id\nalice,{S},{S}\nbob,\"plain, text\",x\n\"carol\",\"quoted {S}\",y"
     );
-    let want = "name,token,user_id\nalice,REDACTION-1,sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA\nbob,\"plain, text\",x\ncarol,quoted REDACTION-1,y";
+    let want = "name,token,user_id\nalice,[REDACTED-1],sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA\nbob,\"plain, text\",x\ncarol,quoted [REDACTED-1],y";
     check("csv", &input, want);
 }
 
 #[test]
 fn csv_crlf() {
     let input = format!("a,b\r\n1,{S}\r\n2,x\r\n");
-    check("csv", &input, "a,b\r\n1,REDACTION-1\r\n2,x\r\n");
+    check("csv", &input, "a,b\r\n1,[REDACTED-1]\r\n2,x\r\n");
 }
 
 #[test]
 fn tsv() {
     let input = format!("k\tv\ntoken\t{S}\n");
-    check("tsv", &input, "k\tv\ntoken\tREDACTION-1\n");
+    check("tsv", &input, "k\tv\ntoken\t[REDACTED-1]\n");
 }
 
 #[test]
@@ -381,7 +387,7 @@ fn binary_plist() {
     let value = plist::Value::from_reader(std::io::Cursor::new(out)).unwrap();
     let dict = value.as_dictionary().unwrap();
     let token = redaction.findings()[0].token();
-    assert_eq!(dict["token"].as_string(), Some(token.as_str()));
+    assert_eq!(dict["token"].as_string(), Some(token));
     assert_eq!(dict["session_id"].as_string(), Some(S));
     assert_eq!(dict["count"].as_signed_integer(), Some(3));
 
@@ -433,10 +439,10 @@ fn traversal_order_is_stable() {
     let keep_two = rendered(&redaction, &Allow::values([second]));
     assert_eq!(
         all,
-        "a: \"REDACTION-1\"\nb: \"REDACTION-2\"\nc: \"REDACTION-1\"\n"
+        "a: \"[REDACTED-1]\"\nb: \"[REDACTED-2]\"\nc: \"[REDACTED-1]\"\n"
     );
     assert_eq!(
         keep_two,
-        format!("a: \"REDACTION-1\"\nb: other-{S}x\nc: \"REDACTION-1\"\n")
+        format!("a: \"[REDACTED-1]\"\nb: other-{S}x\nc: \"[REDACTED-1]\"\n")
     );
 }

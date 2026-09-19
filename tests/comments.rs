@@ -29,7 +29,7 @@ fn json_line_and_block_comments() {
     assert_comment_scanned(
         "json",
         &format!("{{\n  // token {S}\n  \"a\": \"ok\" /* and {S} */\n}}"),
-        "{\n  // token REDACTION-1\n  \"a\": \"ok\" /* and REDACTION-1 */\n}",
+        "{\n  // token [REDACTED-1]\n  \"a\": \"ok\" /* and [REDACTED-1] */\n}",
     );
 }
 
@@ -37,7 +37,7 @@ fn json_line_and_block_comments() {
 fn json_strings_that_look_like_comments_are_left_alone() {
     let input = format!(r#"{{"note": "// not a comment {S}"}}"#);
     // The string is a value, so it is redacted either way, and only once.
-    let want = r#"{"note": "// not a comment REDACTION-1"}"#;
+    let want = r#"{"note": "// not a comment [REDACTED-1]"}"#;
     assert_eq!(redact("json", &input, false), want);
     assert_eq!(redact("json", &input, true), want);
 }
@@ -47,7 +47,7 @@ fn yaml_comments() {
     assert_comment_scanned(
         "yaml",
         &format!("# lead {S}\na: ok # trail {S}\n"),
-        "# lead REDACTION-1\na: ok # trail REDACTION-1\n",
+        "# lead [REDACTED-1]\na: ok # trail [REDACTED-1]\n",
     );
 }
 
@@ -56,7 +56,7 @@ fn yaml_hashes_inside_scalars_are_not_comments() {
     // The block scalar's body is a value: redacted once, and not spliced
     // twice by also being read as a comment.
     let input = format!("note: |\n  # inside {S}\nurl: \"http://x/#frag\"\n");
-    let want = "note: |\n  # inside REDACTION-1\nurl: \"http://x/#frag\"\n";
+    let want = "note: |\n  # inside [REDACTED-1]\nurl: \"http://x/#frag\"\n";
     assert_eq!(redact("yaml", &input, true), want);
     assert_eq!(redact("yaml", &input, false), want);
 }
@@ -66,7 +66,7 @@ fn toml_comments() {
     assert_comment_scanned(
         "toml",
         &format!("# lead {S}\n[s]\na = \"ok\" # trail {S}\n"),
-        "# lead REDACTION-1\n[s]\na = \"ok\" # trail REDACTION-1\n",
+        "# lead [REDACTED-1]\n[s]\na = \"ok\" # trail [REDACTED-1]\n",
     );
 }
 
@@ -81,14 +81,14 @@ fn hcl_comments() {
     assert_comment_scanned(
         "hcl",
         &format!("# lead {S}\nvariable \"v\" {{\n  default = \"ok\" // trail {S}\n}}\n"),
-        "# lead REDACTION-1\nvariable \"v\" {\n  default = \"ok\" // trail REDACTION-1\n}\n",
+        "# lead [REDACTED-1]\nvariable \"v\" {\n  default = \"ok\" // trail [REDACTED-1]\n}\n",
     );
 }
 
 #[test]
 fn hcl_heredoc_bodies_are_values_not_comments() {
     let input = format!("a = <<EOT\n# inside {S}\nEOT\n");
-    let want = "a = <<EOT\n# inside REDACTION-1\nEOT\n";
+    let want = "a = <<EOT\n# inside [REDACTED-1]\nEOT\n";
     assert_eq!(redact("hcl", &input, true), want);
     assert_eq!(redact("hcl", &input, false), want);
 }
@@ -98,12 +98,12 @@ fn ini_and_dotenv_comments() {
     assert_comment_scanned(
         "ini",
         &format!("; lead {S}\n[s]\nkey = ok\n# other {S}\n"),
-        "; lead REDACTION-1\n[s]\nkey = ok\n# other REDACTION-1\n",
+        "; lead [REDACTED-1]\n[s]\nkey = ok\n# other [REDACTED-1]\n",
     );
     assert_comment_scanned(
         "dotenv",
         &format!("# lead {S}\nKEY=ok\n"),
-        "# lead REDACTION-1\nKEY=ok\n",
+        "# lead [REDACTED-1]\nKEY=ok\n",
     );
 }
 
@@ -112,7 +112,7 @@ fn xml_comments() {
     assert_comment_scanned(
         "xml",
         &format!("<r><!-- token {S} --><a>ok</a></r>"),
-        "<r><!-- token REDACTION-1 --><a>ok</a></r>",
+        "<r><!-- token [REDACTED-1] --><a>ok</a></r>",
     );
 }
 
@@ -121,7 +121,7 @@ fn properties_comments() {
     assert_comment_scanned(
         "properties",
         &format!("# lead {S}\nkey=ok\n"),
-        "# lead REDACTION-1\nkey=ok\n",
+        "# lead [REDACTED-1]\nkey=ok\n",
     );
 }
 
@@ -130,7 +130,7 @@ fn a_secret_in_a_comment_shares_the_token_with_the_same_value_elsewhere() {
     let input = format!("# see {S}\na = \"{S}\"\n");
     assert_eq!(
         redact("toml", &input, true),
-        "# see REDACTION-1\na = \"REDACTION-1\"\n"
+        "# see [REDACTED-1]\na = \"[REDACTED-1]\"\n"
     );
 }
 
@@ -139,5 +139,5 @@ fn formats_without_comments_are_unaffected() {
     let input = format!("name,key\nx,{S}\n");
     let with = redact("csv", &input, true);
     assert_eq!(with, redact("csv", &input, false));
-    assert_eq!(with, "name,key\nx,REDACTION-1\n");
+    assert_eq!(with, "name,key\nx,[REDACTED-1]\n");
 }

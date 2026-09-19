@@ -7,12 +7,21 @@ This is a condensed guide to every section. The authoritative, fully commented v
 | Key | Required | Purpose |
 |---|---|---|
 | `comments` | no (default `false`) | Also scan comments, in formats that have them. |
+| `replacement` | no (default `[REDACTED-{n}]`) | Token written in place of each secret. `{n}` is the 1-based redaction number; `{reason}` is the detector label. |
 | `formats` | yes | Formats to recognize, in the order they're tried when guessing from content. |
 | `policy` | yes | Which values get scanned at all. |
 | `placeholder` | yes | Values that look like credentials but are samples or masks. |
 | `detectors` | yes | What finds secrets, run in the order listed. |
 | `allow` | no | Values, key paths (everywhere or in some files) and files never redacted. This overrides every detector. |
 | `agent` | no | Files AI agents must read redacted. |
+
+## replacement
+
+The format must contain exactly one `{n}`, at most one `{reason}`, literal text
+at both ends, and literal text between placeholders. Detector reasons contain
+only ASCII letters, digits, `_`, `.`, `:`, `/`, and `-`. The literal after
+`{reason}` must begin with a character outside that set, such as `]` in
+`[REDACTED-{n}:{reason}]`, so tokens can be found unambiguously.
 
 ## formats
 

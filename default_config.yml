@@ -12,6 +12,23 @@
 comments: false
 
 # ---------------------------------------------------------------------------
+# replacement — the token written in place of each secret.
+#
+# A format string. `{n}` is the 1-based number of this distinct value in the
+# document; the same text always shares a number. `{reason}` is why it was
+# redacted: the detector label (`entropy`, `ruleset:github-pat`,
+# `credential_key`, …). Double a brace to write it literally (`{{` / `}}`).
+#
+# The format must contain exactly one `{n}`, at most one `{reason}`, literal
+# text at both ends, and literal text between placeholders. Reasons contain
+# only ASCII letters, digits, `_`, `.`, `:`, `/`, and `-`. The character
+# immediately after `{reason}` must be outside that set (here it is `]`), so
+# tokens can be found again without consuming surrounding text.
+# ---------------------------------------------------------------------------
+replacement: "[REDACTED-{n}]"
+# replacement: "[REDACTED-{n}:{reason}]"
+
+# ---------------------------------------------------------------------------
 # formats — the input formats to recognize, and the order they are tried in
 # when the format is guessed from content.
 #
