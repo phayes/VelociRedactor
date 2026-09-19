@@ -88,7 +88,7 @@ Directories are searched recursively, skipping hidden files and files that `.git
 
 ## Find files with secrets
 
-`scan` lists the files that hold secrets, with how many values each would have redacted and which detectors found them. It never prints the values:
+`scan` lists the files that hold secrets, with how many values each would have redacted and which detectors found them. Values are hidden by default:
 
 ```console
 $ velociredactor scan
@@ -101,8 +101,11 @@ scanned 5 files: 2 with secrets, 0 skipped as binary or over --max-filesize
 ```console
 velociredactor scan -l config/          # paths only
 velociredactor scan --json              # with the line of each finding
+velociredactor scan --show-value        # include the secrets
 velociredactor scan --unprotected       # only files the agent section leaves readable
 ```
+
+`--show-value` deliberately prints sensitive data and should be used with care. It adds a `VALUE` column to the table, showing up to three values per file cut to 60 characters each, and a `value` field with the full value to each `--json` finding.
 
 Each file is redacted in memory with the configuration found from its own directory, and allow lists apply. Unlike `grep`, hidden and `.gitignore`d files are scanned by default, since that is where secrets usually live; `--skip-hidden` and `--skip-ignored` leave them out. Git's own files and dependency and build directories (`node_modules`, `target`, `vendor`, `.venv`, `venv`, `__pycache__`, `dist`, `build`) are skipped unless `--all-dirs` is given, and so are binary files and files over `--max-filesize` (10M by default). Files that an `agent` section protects are marked `protected`. The exit status is 1 when any file holds secrets, 0 when none does, and 2 on an error with nothing found.
 
@@ -138,7 +141,7 @@ The configuration controls:
 - which keys, objects, and comments are scanned;
 - documentation placeholders excluded from credential detection;
 - the detectors and their settings;
-- exact values, regular expressions, and key paths that are allowed.
+- exact values, regular expressions, surrounding patterns, and key paths that are allowed.
 
 See [default_config.yml](https://github.com/phayes/velociredactor/blob/master/default_config.yml) for a documented example of a config file.
 
@@ -230,6 +233,7 @@ velociredactor scan [OPTIONS] [PATH...]
         --unprotected      Only files no agent section protects (not read)
     -l, --files-with-matches  Print only paths
         --json             Emit JSON
+        --show-value       Include sensitive values
     -g, --glob GLOB        Include (or with `!`, exclude) paths
         --skip-hidden      Skip hidden files (scanned by default)
         --skip-ignored     Skip files ignore files exclude (scanned by default)

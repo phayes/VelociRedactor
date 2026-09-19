@@ -372,13 +372,21 @@ impl<'a> Worker<'a> {
         }
 
         let stdin = path == Path::new("-");
-        let (rules, hint) = if stdin {
-            (self.shared.rules.for_directory(None)?, FormatHint::Auto)
+        let (rules, hint, file) = if stdin {
+            (
+                self.shared.rules.for_directory(None)?,
+                FormatHint::Auto,
+                None,
+            )
         } else {
-            (self.shared.rules.for_file(path)?, FormatHint::Path(path))
+            (
+                self.shared.rules.for_file(path)?,
+                FormatHint::Path(path),
+                Some(path),
+            )
         };
         let redaction = rules
-            .redactor
+            .redactor_for(file)
             .redact(data, hint)
             .with_context(|| format!("redacting {}", display.display()))?;
         for warning in redaction.warnings() {
@@ -387,7 +395,7 @@ impl<'a> Worker<'a> {
                 .push(format!("warning: {}: {warning}", display.display()));
         }
         let redacted = redaction
-            .render(&rules.allow)
+            .render(rules.allow_for(file))
             .with_context(|| format!("redacting {}", display.display()))?;
         outcome.hit = self
             .printer

@@ -322,10 +322,40 @@ allow:
   values: []
   # Patterns a secret must match IN FULL to be left in place.
   regexes: []
-  # Key paths never scanned at all. Unlike the two above, which spare a value
-  # after a detector reports it, these are never looked at, so they never
-  # become findings.
+  # Patterns matched against the whole value around a secret: a secret lying
+  # entirely inside a match is left in place, and never becomes a finding.
+  # Use these when the secret alone looks random but its surroundings show it
+  # is harmless, such as a file name in a font URL. Not anchored, and `.` does
+  # not cross a newline. Keep them tight: a match that runs on past the
+  # harmless text, like `https://fonts\.gstatic\.com/.*`, would also spare a
+  # real secret later on the same line.
+  #   within:
+  #     - 'https://fonts\.gstatic\.com/[^\s"'')]+'
+  within: []
+  # Key paths never scanned at all. Unlike the first two above, which spare a
+  # value after a detector reports it, these are never looked at, so they
+  # never become findings.
   paths: []
+  # Files never redacted: fixtures, sample data, documentation. Everything in
+  # them is left in place, and `scan` does not report them. Patterns are
+  # relative to this file and follow the same .gitignore conventions as the
+  # `agent` section below: a pattern with no `/` matches a file name in any
+  # directory, one with a `/` matches from this directory, and a trailing `/`
+  # covers a whole directory. `*` stays within one path segment and `**`
+  # spans any number.
+  #   files:
+  #     - "*.example"
+  #     - tests/fixtures/
+  #     - docs/**/*.md
+  files: []
+  # Key paths never scanned in some files only, written FILE#KEY.PATH: a file
+  # pattern as in `files` above, `#`, then a key path as in `paths`. Both
+  # halves take globs.
+  #   file_paths:
+  #     - example.yaml#user.name
+  #     - "example.*.yml#user.name"
+  #     - config/**/*.yml#db.*.password
+  file_paths: []
 
 
 # ---------------------------------------------------------------------------

@@ -1721,8 +1721,116 @@ fn scan_prints_json() {
     assert_eq!(file["count"], 1);
     assert_eq!(file["protected"], false);
     assert_eq!(file["findings"][0]["line"], 3);
+    assert!(file["findings"][0].get("value").is_none());
     assert!(!file["detectors"].as_array().unwrap().is_empty());
     assert_eq!(report["scanned"], 1);
+}
+
+#[test]
+fn scan_show_value_prints_the_secrets() {
+    let dir = scan_repo();
+    let out = scan_in(dir.path(), &["--show-value", "config"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let text = stdout(&out);
+    let header = text.lines().next().unwrap();
+    assert!(header.contains("VALUE"), "{text}");
+    assert!(text.contains(S), "{text}");
+
+    let out = scan_in(dir.path(), &["--json", "--show-value", "config"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(report["files"][0]["findings"][0]["value"], S);
+}
+
+#[test]
+fn allowed_files_are_never_redacted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join("tests/fixtures")).unwrap();
+    rules_config(
+        root,
+        "allow:\n  files:\n    - tests/fixtures/\n    - \"*.example\"\n",
+    );
+    let secret = format!("ANTHROPIC_KEY={S}\n");
+    fs::write(root.join(".env"), &secret).unwrap();
+    fs::write(root.join(".env.example"), &secret).unwrap();
+    fs::write(root.join("tests/fixtures/app.env"), &secret).unwrap();
+    let run = |args: &[&str]| velociredactor_in(root, root, args, &secret);
+
+    for file in [".env.example", "tests/fixtures/app.env"] {
+        let out = run(&["redact", file]);
+        assert!(out.status.success(), "{file}: {}", stderr(&out));
+        assert_eq!(stdout(&out), secret, "{file}");
+        let out = run(&["list", "--check", file]);
+        assert!(out.status.success(), "{file}: {}", stderr(&out));
+        assert!(stdout(&out).contains("allowed"), "{file}");
+    }
+    for args in [&["redact", ".env"][..], &["redact"]] {
+        let out = run(args);
+        assert!(!stdout(&out).contains(S), "{args:?}");
+    }
+
+    let out = run(&["scan", "-l"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stdout(&out), ".env\n");
+
+    let out = run(&["grep", "--hidden", "-l", "sk-ant"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), ".env.example\ntests/fixtures/app.env\n");
+}
+
+#[test]
+fn allowed_file_paths_apply_to_their_files_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir(root.join(".git")).unwrap();
+    rules_config(
+        root,
+        "allow:\n  file_paths:\n    - example.yaml#user.name\n    - \"example.*.yml#user.name\"\n",
+    );
+    let document = format!("user:\n  name: \"{S}\"\n  token: \"{S}x\"\n");
+    for file in ["example.yaml", "example.prod.yml", "other.yaml"] {
+        fs::write(root.join(file), &document).unwrap();
+    }
+    let run = |args: &[&str]| velociredactor_in(root, root, args, &document);
+
+    for file in ["example.yaml", "example.prod.yml"] {
+        let out = run(&["redact", file]);
+        let text = stdout(&out);
+        assert!(text.contains(&format!("name: \"{S}\"")), "{file}: {text}");
+        assert!(!text.contains(&format!("{S}x")), "{file}: {text}");
+    }
+    for args in [&["redact", "other.yaml"][..], &["redact"]] {
+        let text = stdout(&run(args));
+        assert!(!text.contains(S), "{args:?}: {text}");
+    }
+
+    let out = run(&["grep", "-l", "--fixed-strings", &format!("name: \"{S}\"")]);
+    assert_eq!(
+        stdout(&out),
+        "example.prod.yml\nexample.yaml\n",
+        "{}",
+        stderr(&out)
+    );
+
+    let out = run(&["scan", "--json"]);
+    let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    for file in report["files"].as_array().unwrap() {
+        let expected = if file["path"] == "other.yaml" { 2 } else { 1 };
+        assert_eq!(file["count"], expected, "{file}");
+    }
+}
+
+#[test]
+fn a_file_path_without_a_separator_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = rules_config(dir.path(), "allow:\n  file_paths: [example.yaml]\n");
+    let out = velociredactor(&["config", "validate", "--config", &config], "");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stderr(&out).contains("FILE#KEY.PATH"), "{}", stderr(&out));
+    let out = velociredactor(&["redact", "--config", &config], "x\n");
+    assert_eq!(out.status.code(), Some(2));
 }
 
 #[test]

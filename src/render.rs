@@ -37,12 +37,22 @@ pub fn find_tokens(s: &str) -> impl Iterator<Item = Range<usize>> + '_ {
 pub struct Allow {
     values: HashSet<String>,
     regexes: Vec<Regex>,
+    /// Leave every secret in place, for files allowed whole.
+    everything: bool,
 }
 
 impl Allow {
     /// Redact everything.
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Redact nothing.
+    pub fn all() -> Self {
+        Self {
+            everything: true,
+            ..Self::default()
+        }
     }
 
     /// Leave these exact secret values unredacted.
@@ -83,7 +93,8 @@ impl Allow {
 
     /// Whether `finding` should be left unredacted.
     pub fn allows(&self, finding: &Finding) -> bool {
-        self.values.contains(&finding.secret)
+        self.everything
+            || self.values.contains(&finding.secret)
             || self.regexes.iter().any(|r| r.is_match(&finding.secret))
     }
 }

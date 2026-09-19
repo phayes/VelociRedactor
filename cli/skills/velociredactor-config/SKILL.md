@@ -31,7 +31,10 @@ velociredactor config show > velociredactor.yml
 |---|---|---|
 | A value is wrongly redacted | `allow.values` | `values: ["not-a-secret-build-id"]` |
 | A family of values is wrongly redacted | `allow.regexes` (must match the whole value) | `regexes: ['^build-[0-9a-f]{12}$']` |
+| A value is harmless only where it appears, like a file name in a font URL | `allow.within` (the secret must lie inside a match in its value) | `within: ['https://fonts\.gstatic\.com/[^\s"'')]+']` |
 | A key's values must never be scanned | `allow.paths` (dotted key-path glob) | `paths: ["build.**", "**.commit_sha"]` |
+| A key's values must never be scanned in some files only | `allow.file_paths` (`FILE#KEY.PATH`) | `file_paths: ["example.yaml#user.name"]` |
+| A whole file holds only samples or fixtures | `allow.files` (`.gitignore`-style, relative to the config) | `files: ["tests/fixtures/", "*.example"]` |
 | A sample credential keeps being flagged | `placeholder.values` (lowercase) | add `"dummy_token"` |
 | An in-house token format is missed | a new `regex` detector | see below |
 | A known secret string must always go | a `value` detector | `- value: { values: [hunter2] }` |

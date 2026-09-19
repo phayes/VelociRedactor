@@ -5,18 +5,18 @@
 //! `velociredactor redact` instead. The section only records which files those
 //! are; the agent skills and hooks that act on it live outside this crate.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::Glob;
+use crate::files::FileGlobs;
 
 /// The `agent` section of a configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
     /// Path globs, relative to the directory holding the configuration, of
-    /// files agents must read redacted. See [`AgentPolicy`] for the syntax.
+    /// files agents must read redacted. See [`FileGlobs`] for the syntax.
     pub protected: Vec<String>,
     /// Path globs that are never protected, even when `protected` matches.
     pub exclude: Vec<String>,
@@ -25,22 +25,11 @@ pub struct AgentConfig {
     pub enforce: bool,
 }
 
-/// The compiled `agent` section, anchored at a project directory.
-///
-/// Patterns follow `.gitignore` conventions, with `/` as the separator:
-///
-/// - a pattern with no `/` matches a file name in any directory (`.env*`,
-///   `*.pem`);
-/// - a pattern with a `/` matches the path from the project directory, with or
-///   without a leading `/` (`config/prod.yml`, `/secrets/**`);
-/// - a pattern ending in `/` matches everything under that directory
-///   (`secrets/`);
-/// - `*` and `?` stay within one path segment, and `**` spans segments.
+/// The compiled `agent` section, anchored at a project directory. Its
+/// patterns follow [`FileGlobs`].
 #[derive(Debug, Clone)]
 pub struct AgentPolicy {
-    base: PathBuf,
-    protected: Vec<Glob>,
-    exclude: Vec<Glob>,
+    files: FileGlobs,
     enforce: bool,
 }
 
@@ -48,18 +37,15 @@ impl AgentPolicy {
     /// Compile `config` with its paths relative to `base`, which should be
     /// absolute.
     pub fn new(config: &AgentConfig, base: impl Into<PathBuf>) -> Self {
-        let base = base.into();
         Self {
-            base: std::fs::canonicalize(&base).unwrap_or(base),
-            protected: config.protected.iter().map(|p| compile(p)).collect(),
-            exclude: config.exclude.iter().map(|p| compile(p)).collect(),
+            files: FileGlobs::new(&config.protected, &config.exclude, base),
             enforce: config.enforce,
         }
     }
 
     /// The directory patterns are relative to.
     pub fn base(&self) -> &Path {
-        &self.base
+        self.files.base()
     }
 
     /// Whether direct reads of protected files should be blocked.
@@ -74,62 +60,8 @@ impl AgentPolicy {
     /// to a protected file is protected, and so is a protected link. Paths
     /// outside the project directory are never protected.
     pub fn is_protected(&self, path: &Path) -> bool {
-        let Ok(absolute) = std::path::absolute(path) else {
-            return false;
-        };
-        let lexical = normalize(&absolute);
-        let resolved = std::fs::canonicalize(&absolute).ok();
-        std::iter::once(lexical)
-            .chain(resolved)
-            .any(|candidate| self.matches(&candidate))
+        self.files.matches(path)
     }
-
-    fn matches(&self, absolute: &Path) -> bool {
-        let Ok(relative) = absolute.strip_prefix(&self.base) else {
-            return false;
-        };
-        let relative: Vec<_> = relative
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect();
-        let relative = relative.join("/");
-        if relative.is_empty() {
-            return false;
-        }
-        let hit = |globs: &[Glob]| globs.iter().any(|glob| glob.is_match(&relative));
-        hit(&self.protected) && !hit(&self.exclude)
-    }
-}
-
-/// Compile one `.gitignore`-style pattern into a path glob.
-fn compile(pattern: &str) -> Glob {
-    let pattern = pattern.trim();
-    // As in `.gitignore`, only a slash before the end anchors a pattern.
-    let anchored = pattern.trim_end_matches('/').contains('/');
-    let mut pattern = pattern.trim_start_matches('/').to_owned();
-    if pattern.ends_with('/') {
-        pattern.push_str("**");
-    }
-    if anchored {
-        Glob::path(&pattern)
-    } else {
-        Glob::path(&format!("**/{pattern}"))
-    }
-}
-
-/// Remove `.` and resolve `..` without touching the file system.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

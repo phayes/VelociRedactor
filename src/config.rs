@@ -33,13 +33,14 @@
 //! can be moved around with the rules it names.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use serde::Deserialize;
 
 use crate::agent::AgentConfig;
 use crate::detect::{DetectorConfig, PlaceholderConfig, Placeholders};
+use crate::files::{FileGlobs, FileKeyPaths};
 use crate::format::{self, FormatRegistry};
 use crate::policy::{ConfigPolicy, PolicyConfig};
 use crate::{Allow, Error, Redactor, RedactorBuilder};
@@ -73,7 +74,7 @@ pub struct Config {
     pub agent: Option<AgentConfig>,
 }
 
-/// Values, patterns, and key paths that survive redaction.
+/// Values, patterns, key paths, and files that survive redaction.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AllowRules {
@@ -81,9 +82,19 @@ pub struct AllowRules {
     pub values: Vec<String>,
     /// Regular expressions a secret must match in full (Rust `regex` syntax).
     pub regexes: Vec<String>,
+    /// Regular expressions matched against the whole value holding a secret;
+    /// a secret lying entirely inside a match is left in place. See
+    /// [`RedactorBuilder::allow_within`].
+    pub within: Vec<String>,
     /// Key-path globs never scanned at all; see
     /// [`Glob::new`](crate::Glob::new).
     pub paths: Vec<String>,
+    /// Path globs, relative to the directory holding the configuration, of
+    /// files never redacted; see [`FileGlobs`] for the syntax.
+    pub files: Vec<String>,
+    /// Key paths never scanned in some files only, as
+    /// `FILE#KEY.PATH`; see [`FileKeyPaths`].
+    pub file_paths: Vec<String>,
 }
 
 impl Default for Config {
@@ -133,6 +144,19 @@ impl Config {
         for detector in &mut self.detectors {
             detector.resolve_paths(base);
         }
+    }
+
+    /// The files this configuration never redacts, with `allow.files`
+    /// relative to `base`: the directory holding the configuration.
+    pub fn allowed_files(&self, base: impl Into<PathBuf>) -> FileGlobs {
+        FileGlobs::new(&self.allow.files, &[] as &[String], base)
+    }
+
+    /// The key paths this configuration never scans in particular files,
+    /// with `allow.file_paths` relative to `base`: the directory holding the
+    /// configuration.
+    pub fn allowed_file_paths(&self, base: impl Into<PathBuf>) -> Result<FileKeyPaths, Error> {
+        FileKeyPaths::new(&self.allow.file_paths, base)
     }
 
     /// The secrets this configuration leaves in place.
@@ -192,6 +216,12 @@ impl Config {
         if let Err(error) = self.allow() {
             errors.push(error.to_string());
         }
+        if let Err(error) = RedactorBuilder::new().allow_within(&self.allow.within) {
+            errors.push(error.to_string());
+        }
+        if let Err(error) = self.allowed_file_paths(PathBuf::new()) {
+            errors.push(error.to_string());
+        }
 
         if self
             .agent
@@ -217,7 +247,8 @@ impl Config {
         let mut builder = builder
             .policy(ConfigPolicy::new(&self.policy)?)
             .comments(self.comments)
-            .allow_paths(&self.allow.paths);
+            .allow_paths(&self.allow.paths)
+            .allow_within(&self.allow.within)?;
 
         let available = FormatRegistry::default();
         for name in &self.formats {
@@ -262,7 +293,10 @@ mod tests {
         assert!(!config.comments, "comments are off by default");
         assert!(config.allow.values.is_empty());
         assert!(config.allow.regexes.is_empty());
+        assert!(config.allow.within.is_empty());
         assert!(config.allow.paths.is_empty());
+        assert!(config.allow.files.is_empty());
+        assert!(config.allow.file_paths.is_empty());
     }
 
     /// The detectors the built-in configuration lists, which is what
@@ -506,6 +540,7 @@ mod tests {
             ..RegexConfig::default()
         }));
         config.allow.regexes.push("unclosed(".into());
+        config.allow.within.push("unclosed(".into());
 
         let (errors, _) = config.validate();
         assert!(errors.iter().any(|e| e.contains("jsn")), "{errors:?}");
@@ -515,6 +550,10 @@ mod tests {
         );
         assert!(
             errors.iter().any(|e| e.contains("allow-regex")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("allow-within")),
             "{errors:?}"
         );
     }

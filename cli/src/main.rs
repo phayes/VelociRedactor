@@ -17,8 +17,8 @@ use velociredactor::detect::privacy_filter;
 use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor};
 
 use crate::util::{
-    CONFIG_FILE_NAMES, ConfigArg, SKIPPED_DIRS, WalkOptions, anchored_policy, build_redactor,
-    git_root, is_file, shell_quote, walk_builder,
+    CONFIG_FILE_NAMES, ConfigArg, SKIPPED_DIRS, WalkOptions, allowed_file_paths, allowed_files,
+    anchored_policy, build_redactor, git_root, is_file, shell_quote, walk_builder,
 };
 
 /// Redact secrets and personal data from files.
@@ -55,12 +55,13 @@ enum Command {
     /// Line numbers count lines of the redacted text, which can be fewer
     /// than the file's when a multi-line secret becomes one token.
     Grep(search::GrepArgs),
-    /// List the files that hold secrets, without showing the secrets.
+    /// List the files that hold secrets.
     ///
     /// Every file is redacted in memory with the configuration found from
     /// its own directory, and each file with anything to redact is listed
-    /// with how many values and which detectors found them. Directories are
-    /// scanned recursively, including hidden and ignored files, where secrets
+    /// with how many values and which detectors found them. Values are
+    /// hidden unless `--show-value` is given. Directories are scanned
+    /// recursively, including hidden and ignored files, where secrets
     /// usually are, but not Git's files or dependency and build directories.
     /// Binary files are skipped.
     ///
@@ -354,6 +355,35 @@ impl InputArgs {
     fn config(&self) -> Result<Config> {
         self.config.load()
     }
+
+    /// The redactor for the input: with the key paths `allow.file_paths`
+    /// names for the input file left unscanned.
+    fn redactor(&self, config: &Config) -> Result<Redactor> {
+        let redactor = build_redactor(config)?;
+        // Parsed even for standard input, so a bad entry is always an error.
+        let config_path = self.config.resolved_path()?;
+        let file_paths = allowed_file_paths(config, config_path.as_deref())?;
+        let Some(path) = self.path() else {
+            return Ok(redactor);
+        };
+        let key_paths = file_paths.for_file(path);
+        if key_paths.is_empty() {
+            return Ok(redactor);
+        }
+        Ok(redactor.with_allow_paths(key_paths))
+    }
+
+    /// The allow list for the input: everything, when `allow.files` in the
+    /// configuration names the input file.
+    fn allow(&self, config: &Config) -> Result<Allow> {
+        if let Some(path) = self.path() {
+            let config_path = self.config.resolved_path()?;
+            if allowed_files(config, config_path.as_deref())?.matches(path) {
+                return Ok(Allow::all());
+            }
+        }
+        Ok(config.allow()?)
+    }
 }
 
 fn main() -> ExitCode {
@@ -389,7 +419,7 @@ fn redact(args: RedactArgs) -> Result<ExitCode> {
         bail!("--in-place needs a file");
     }
     let config = args.input.config()?;
-    let redactor = build_redactor(&config)?;
+    let redactor = args.input.redactor(&config)?;
     let input = read_input(path)?;
     let (redaction, allow) = scan(&redactor, &config, &args.input, &input)?;
 
@@ -410,7 +440,7 @@ fn redact(args: RedactArgs) -> Result<ExitCode> {
 
 fn list(args: ListArgs) -> Result<ExitCode> {
     let config = args.input.config()?;
-    let redactor = build_redactor(&config)?;
+    let redactor = args.input.redactor(&config)?;
     let input = read_input(args.input.path())?;
     let (redaction, allow) = scan(&redactor, &config, &args.input, &input)?;
 
@@ -1168,7 +1198,7 @@ fn scan<'a>(
     };
 
     let redaction = redactor.redact(input, hint)?;
-    let allow = config.allow()?;
+    let allow = args.allow(config)?;
 
     for warning in redaction.warnings() {
         eprintln!("warning: {warning}");

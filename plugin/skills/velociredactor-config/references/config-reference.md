@@ -11,7 +11,7 @@ This is a condensed guide to every section. The authoritative, fully commented v
 | `policy` | yes | Which values get scanned at all. |
 | `placeholder` | yes | Values that look like credentials but are samples or masks. |
 | `detectors` | yes | What finds secrets, run in the order listed. |
-| `allow` | no | Values and key paths never redacted. This overrides every detector. |
+| `allow` | no | Values, key paths (everywhere or in some files) and files never redacted. This overrides every detector. |
 | `agent` | no | Files AI agents must read redacted. |
 
 ## formats
@@ -61,7 +61,10 @@ Key-path globs, used by `path` and `allow.paths`: keys are joined with `.`, and 
 
 - `values`: exact strings left in place.
 - `regexes`: patterns that must match the **whole** value.
+- `within`: patterns matched against the whole value around a secret. A secret lying entirely inside a match is left in place and never becomes a finding, so `list` does not show it. Use them when the secret alone looks random but its surroundings show it is harmless: `'https://fonts\.gstatic\.com/[^\s"'')]+'` spares the file name in a font URL, while the same text elsewhere is still redacted. Not anchored, and `.` does not cross a newline. Keep them tight: `https://fonts\.gstatic\.com/.*` would also spare a real secret later on the same line.
 - `paths`: key-path globs that are never scanned.
+- `files`: file globs never redacted at all, relative to the config file, with the same `.gitignore` conventions as `agent` (`tests/fixtures/`, `*.example`). `scan` does not report them.
+- `file_paths`: key paths never scanned in some files only, written `FILE#KEY.PATH`: a file glob as in `files`, `#`, then a key-path glob as in `paths` (`example.yaml#user.name`, `"config/*.yml#db.*.password"`).
 
 ## agent
 

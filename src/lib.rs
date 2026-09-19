@@ -5,6 +5,7 @@ pub mod agent;
 pub mod config;
 pub mod detect;
 mod error;
+pub mod files;
 pub mod format;
 mod glob;
 pub mod policy;

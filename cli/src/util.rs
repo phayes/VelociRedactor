@@ -1,11 +1,12 @@
 //! What the commands share: finding and loading configurations, and small
 //! helpers.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -16,6 +17,7 @@ use rayon::iter::{ParallelBridge, ParallelIterator};
 use velociredactor::agent::AgentPolicy;
 use velociredactor::config::Config;
 use velociredactor::detect::DetectorConfig;
+use velociredactor::files::{FileGlobs, FileKeyPaths};
 use velociredactor::{Allow, Redactor};
 
 /// Environment variable naming a configuration file that replaces the
@@ -227,8 +229,60 @@ pub fn build_redactor(config: &Config) -> Result<Redactor> {
 pub struct Rules {
     pub redactor: Redactor,
     pub allow: Allow,
+    /// Its `allow.files`, anchored at its directory.
+    pub allowed_files: FileGlobs,
+    /// Its `allow.file_paths`, anchored at its directory.
+    pub allowed_file_paths: FileKeyPaths,
     /// Its `agent` section, anchored at its directory.
     pub agent: Option<AgentPolicy>,
+}
+
+impl Rules {
+    /// The redactor for the file at `path`, or for standard input when
+    /// `None`: with the key paths `allow.file_paths` names for the file
+    /// left unscanned.
+    pub fn redactor_for(&self, path: Option<&Path>) -> Cow<'_, Redactor> {
+        let key_paths = path.map_or_else(Vec::new, |path| self.allowed_file_paths.for_file(path));
+        if key_paths.is_empty() {
+            Cow::Borrowed(&self.redactor)
+        } else {
+            Cow::Owned(self.redactor.with_allow_paths(key_paths))
+        }
+    }
+
+    /// The allow list for the file at `path`, or for standard input when
+    /// `None`: everything, when `allow.files` names the file.
+    pub fn allow_for(&self, path: Option<&Path>) -> &Allow {
+        static ALL: LazyLock<Allow> = LazyLock::new(Allow::all);
+        match path {
+            Some(path) if self.allowed_files.matches(path) => &ALL,
+            _ => &self.allow,
+        }
+    }
+}
+
+/// The directory `allow.files` and `allow.file_paths` of the configuration
+/// loaded from `path` are relative to; empty for the built-in configuration,
+/// which allows no files.
+fn config_base(path: Option<&Path>) -> Result<PathBuf> {
+    let Some(path) = path else {
+        return Ok(PathBuf::new());
+    };
+    let absolute =
+        std::path::absolute(path).with_context(|| format!("resolving {}", path.display()))?;
+    Ok(absolute.parent().unwrap_or(Path::new("/")).to_owned())
+}
+
+/// The `allow.files` of `config`, loaded from `path`, anchored at the
+/// directory holding it; the built-in configuration's when `path` is `None`.
+pub fn allowed_files(config: &Config, path: Option<&Path>) -> Result<FileGlobs> {
+    Ok(config.allowed_files(config_base(path)?))
+}
+
+/// The `allow.file_paths` of `config`, loaded from `path`, anchored at the
+/// directory holding it; the built-in configuration's when `path` is `None`.
+pub fn allowed_file_paths(config: &Config, path: Option<&Path>) -> Result<FileKeyPaths> {
+    Ok(config.allowed_file_paths(config_base(path)?)?)
 }
 
 /// The rules of the configuration at `path`, or of the built-in
@@ -252,6 +306,8 @@ fn load_rules(path: Option<&Path>, skip_model: bool) -> Result<Rules> {
         Ok(Rules {
             redactor: build_redactor(&config)?,
             allow: config.allow()?,
+            allowed_files: allowed_files(&config, path)?,
+            allowed_file_paths: allowed_file_paths(&config, path)?,
             agent,
         })
     };

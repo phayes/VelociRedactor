@@ -123,6 +123,90 @@ fn allowed_paths_are_never_scanned() {
     assert!(out.contains(r#""ssn": "123-45-6789""#), "{out}");
 }
 
+const FONT_URL: &str =
+    "https://fonts.gstatic.com/s/bebasneue/v9/JTUSjIg69CK48gW7PXoo9WdhyyTh89ZNpQ.woff2";
+const FONT_FILE: &str = "JTUSjIg69CK48gW7PXoo9WdhyyTh89ZNpQ";
+const FONTS: &str = r#"https://fonts\.gstatic\.com/[^\s"')]+"#;
+
+#[test]
+fn allowed_within_spares_a_secret_by_its_surroundings() {
+    let doc =
+        format!(r#"{{"css": "src: url({FONT_URL}) format('woff2')", "other": "{FONT_FILE}"}}"#);
+    let unallowed = scan(Redactor::builder(), &doc);
+    assert!(
+        unallowed.findings().iter().any(|f| f.secret == FONT_FILE),
+        "the file name alone looks like a secret"
+    );
+
+    let redaction = scan(Redactor::builder().allow_within([FONTS]).unwrap(), &doc);
+    let out = render(&redaction, &Allow::none());
+    assert_eq!(
+        out,
+        format!(r#"{{"css": "src: url({FONT_URL}) format('woff2')", "other": "REDACTION-1"}}"#),
+        "only the occurrence inside the URL survives"
+    );
+    assert_eq!(
+        redaction.findings()[0].occurrences,
+        1,
+        "the allowed occurrence is not counted"
+    );
+}
+
+#[test]
+fn allowed_within_does_not_spare_a_secret_reaching_past_the_match() {
+    let doc = r#"{"a": "keep:abc123"}"#;
+    let builder = || Redactor::builder().detector(RegexDetector::new("regex", "abc123").unwrap());
+
+    let out = redact(builder().allow_within(["keep:abc"]).unwrap(), doc);
+    assert_eq!(out, r#"{"a": "keep:REDACTION-1"}"#);
+
+    let out = redact(builder().allow_within(["keep:abc123"]).unwrap(), doc);
+    assert_eq!(out, doc);
+
+    // A pattern that is the secret alone behaves like `allow.regexes`.
+    let out = redact(builder().allow_within(["abc123"]).unwrap(), doc);
+    assert_eq!(out, doc);
+}
+
+#[test]
+fn allowed_within_applies_to_comments() {
+    let doc = format!("# {FONT_URL}\nfont: x\n");
+    let findings = |builder: RedactorBuilder| {
+        builder
+            .comments(true)
+            .build()
+            .redact(doc.as_bytes(), FormatHint::Name("yaml"))
+            .unwrap()
+            .findings()
+            .len()
+    };
+    assert_eq!(findings(Redactor::builder()), 1, "the comment is scanned");
+    assert_eq!(
+        findings(Redactor::builder().allow_within([FONTS]).unwrap()),
+        0
+    );
+}
+
+#[test]
+fn allowed_within_comes_from_the_configuration() {
+    let mut config = Config::builtin().clone();
+    config.allow.within.push(FONTS.into());
+    let redactor = config.redactor().expect("valid configuration").0;
+    let doc = format!(r#"{{"css": "url({FONT_URL})"}}"#);
+    assert_eq!(redact_with(&redactor, &doc), doc);
+}
+
+#[test]
+fn an_invalid_allowed_within_pattern_is_not_echoed() {
+    let err = Redactor::builder()
+        .allow_within(["sk-live-SECRET("])
+        .err()
+        .expect("the pattern does not compile")
+        .to_string();
+    assert!(err.contains("allow-within"), "{err}");
+    assert!(!err.contains("SECRET"), "{err}");
+}
+
 #[test]
 fn disallowed_values_and_patterns_are_reported_by_their_own_detectors() {
     let redaction = scan(

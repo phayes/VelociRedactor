@@ -3,9 +3,11 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
+use regex::Regex;
+
 use crate::Error;
 use crate::config::Config;
-use crate::detect::{Detection, Detector, DocumentValue, LeafContext};
+use crate::detect::{Detection, Detector, DocumentValue, LeafContext, describe_regex_error};
 use crate::format::{
     Container, Edit, Format, FormatRegistry, Leaf, LeafKind, LeafVisitor, Replacement, apply_edits,
 };
@@ -37,6 +39,7 @@ pub struct RedactorBuilder {
     policy: Arc<dyn LeafPolicy>,
     comments: bool,
     allow_paths: Vec<Glob>,
+    allow_within: Vec<Regex>,
 }
 
 impl Default for RedactorBuilder {
@@ -54,6 +57,7 @@ impl RedactorBuilder {
             policy: Arc::new(DefaultPolicy),
             comments: false,
             allow_paths: Vec::new(),
+            allow_within: Vec::new(),
         }
     }
 
@@ -119,6 +123,34 @@ impl RedactorBuilder {
         self
     }
 
+    /// Never redact a finding that lies entirely inside a match of one of
+    /// these patterns (Rust `regex` syntax) in the same value.
+    ///
+    /// The patterns are not anchored, and `.` does not match a newline. Each
+    /// is matched against the whole value holding the finding, so a pattern
+    /// can name the text around a secret as well as the secret itself: with
+    /// `https://fonts\.gstatic\.com/[^\s"')]+`, a random-looking file name
+    /// inside a font URL survives, while the same text elsewhere does not. A
+    /// finding that reaches past the end of a match is still redacted. Spared
+    /// findings are dropped before findings are identified, so, like
+    /// [`allow_paths`](Self::allow_paths), they never become findings.
+    ///
+    /// Compile errors deliberately omit the pattern text, since a pattern may
+    /// itself contain a secret.
+    pub fn allow_within(
+        mut self,
+        patterns: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, Error> {
+        for pattern in patterns {
+            let regex = Regex::new(pattern.as_ref()).map_err(|err| Error::InvalidPattern {
+                name: "allow-within".into(),
+                message: describe_regex_error(&err),
+            })?;
+            self.allow_within.push(regex);
+        }
+        Ok(self)
+    }
+
     /// Finish the builder and return an immutable redactor.
     pub fn build(self) -> Redactor {
         Redactor {
@@ -127,6 +159,7 @@ impl RedactorBuilder {
             policy: self.policy,
             comments: self.comments,
             allow_paths: self.allow_paths.into(),
+            allow_within: self.allow_within.into(),
         }
     }
 }
@@ -154,6 +187,7 @@ pub struct Redactor {
     policy: Arc<dyn LeafPolicy>,
     comments: bool,
     allow_paths: Arc<[Glob]>,
+    allow_within: Arc<[Regex]>,
 }
 
 impl Default for Redactor {
@@ -253,6 +287,18 @@ impl Redactor {
         Ok(redaction)
     }
 
+    /// This redactor, also leaving unscanned the key paths `patterns`
+    /// matches, as [`RedactorBuilder::allow_paths`] does. Used to allow key
+    /// paths in some files only.
+    pub fn with_allow_paths(&self, patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        let mut allow_paths = self.allow_paths.to_vec();
+        allow_paths.extend(patterns.into_iter().map(|p| Glob::new(p.as_ref())));
+        Self {
+            allow_paths: allow_paths.into(),
+            ..self.clone()
+        }
+    }
+
     fn collector(&self) -> Collector<'_> {
         Collector::new(self.policy.as_ref(), &self.allow_paths, self.comments)
     }
@@ -312,8 +358,29 @@ impl Redactor {
         Ok(leaves
             .iter()
             .zip(detected)
-            .map(|(leaf, out)| render::merge(&leaf.value, out))
+            .map(|(leaf, out)| {
+                self.drop_allowed_within(&leaf.value, render::merge(&leaf.value, out))
+            })
             .collect())
+    }
+
+    /// Remove the merged `detections` of `value` that lie entirely inside a
+    /// match of an [`allow_within`](RedactorBuilder::allow_within) pattern.
+    fn drop_allowed_within(&self, value: &str, mut detections: Vec<Detection>) -> Vec<Detection> {
+        if detections.is_empty() || self.allow_within.is_empty() {
+            return detections;
+        }
+        let spans: Vec<Range<usize>> = self
+            .allow_within
+            .iter()
+            .flat_map(|regex| regex.find_iter(value).map(|m| m.range()))
+            .collect();
+        detections.retain(|d| {
+            !spans
+                .iter()
+                .any(|span| span.start <= d.range.start && d.range.end <= span.end)
+        });
+        detections
     }
 }
 

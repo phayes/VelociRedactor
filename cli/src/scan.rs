@@ -3,8 +3,8 @@
 //! Every file under the given paths is redacted in memory, with the
 //! configuration found from its own directory. Files left with anything to
 //! redact after allow lists are reported, with how many values would be
-//! redacted and which detectors found them. The values themselves are never
-//! printed.
+//! redacted and which detectors found them. Values are hidden unless
+//! `--show-value` is given.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -42,6 +42,10 @@ pub struct ScanArgs {
     /// Print the results as JSON.
     #[arg(long, conflicts_with = "files_with_matches")]
     json: bool,
+
+    /// Include redacted values in the report.
+    #[arg(long, conflicts_with = "files_with_matches")]
+    show_value: bool,
 
     /// Scan only paths matching this glob; a leading `!` excludes instead.
     /// Repeat for more.
@@ -91,6 +95,8 @@ pub struct Scan<'a> {
     pub unprotected: bool,
     /// Leave out the `privacy_filter` detector.
     pub skip_model: bool,
+    /// Keep the redacted values on each finding.
+    pub show_value: bool,
     /// Paths are shown relative to this directory when under it.
     pub relative_to: Option<&'a Path>,
 }
@@ -113,6 +119,7 @@ impl Scan<'_> {
             max_files: Some(50_000),
             unprotected: true,
             skip_model,
+            show_value: false,
             relative_to: Some(root),
         }
     }
@@ -122,11 +129,20 @@ impl Scan<'_> {
 pub struct Hit {
     /// The path as shown.
     pub path: PathBuf,
-    /// Each value that would be redacted, as its detector and, when known,
-    /// its line.
-    pub findings: Vec<(String, Option<usize>)>,
+    /// Each value that would be redacted.
+    pub findings: Vec<Finding>,
     /// Whether an `agent` section protects the file.
     pub protected: bool,
+}
+
+/// One value that would be redacted.
+pub struct Finding {
+    /// What found it.
+    pub detector: String,
+    /// 1-based line, when the format reports a position.
+    pub line: Option<usize>,
+    /// The secret itself, only when the scan was asked to keep values.
+    pub value: Option<String>,
 }
 
 impl Hit {
@@ -134,9 +150,9 @@ impl Hit {
     /// finding.
     pub fn detectors(&self) -> Vec<&str> {
         let mut detectors: Vec<&str> = Vec::new();
-        for (detector, _) in &self.findings {
-            if !detectors.contains(&detector.as_str()) {
-                detectors.push(detector);
+        for finding in &self.findings {
+            if !detectors.contains(&finding.detector.as_str()) {
+                detectors.push(&finding.detector);
             }
         }
         detectors
@@ -258,6 +274,10 @@ fn scan_file(rules: &RulesCache, options: &Scan<'_>, path: &Path) -> Outcome {
         if protected && options.unprotected {
             return Ok(Outcome::Protected);
         }
+        // `allow.files` leaves nothing in these files to redact.
+        if rules.allowed_files.matches(path) {
+            return Ok(Outcome::Clean);
+        }
 
         let mut file =
             fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
@@ -277,16 +297,17 @@ fn scan_file(rules: &RulesCache, options: &Scan<'_>, path: &Path) -> Outcome {
         }
 
         let redaction = rules
-            .redactor
+            .redactor_for(Some(path))
             .redact(&data, FormatHint::Path(path))
             .with_context(|| format!("redacting {}", path.display()))?;
         let findings: Vec<_> = redaction
             .findings()
             .iter()
             .filter(|finding| !rules.allow.allows(finding))
-            .map(|finding| {
-                let line = finding.offset().map(|o| redaction.line_col(o).0);
-                (finding.detector.clone(), line)
+            .map(|finding| Finding {
+                detector: finding.detector.clone(),
+                line: finding.offset().map(|o| redaction.line_col(o).0),
+                value: options.show_value.then(|| finding.secret.clone()),
             })
             .collect();
         if findings.is_empty() {
@@ -321,6 +342,7 @@ pub fn run(args: ScanArgs) -> Result<ExitCode> {
         max_files: None,
         unprotected: args.unprotected,
         skip_model: false,
+        show_value: args.show_value,
         relative_to: implicit_root.then_some(Path::new(".")),
     };
     let report = scan(
@@ -357,7 +379,16 @@ fn print(args: &ScanArgs, report: &Report) -> Result<()> {
                 let findings: Vec<_> = hit
                     .findings
                     .iter()
-                    .map(|(detector, line)| json!({ "detector": detector, "line": line }))
+                    .map(|finding| {
+                        let mut entry = json!({
+                            "detector": finding.detector,
+                            "line": finding.line,
+                        });
+                        if let Some(value) = &finding.value {
+                            entry["value"] = json!(value);
+                        }
+                        entry
+                    })
                     .collect();
                 json!({
                     "path": hit.path.display().to_string(),
@@ -387,19 +418,28 @@ fn print(args: &ScanArgs, report: &Report) -> Result<()> {
     }
 
     if !report.hits.is_empty() {
-        let rows: Vec<[String; 4]> = report
+        let mut header = vec!["FILE", "FINDINGS", "DETECTORS"];
+        if args.show_value {
+            header.push("VALUE");
+        }
+        header.push("");
+        let header: Vec<String> = header.into_iter().map(String::from).collect();
+        let rows: Vec<Vec<String>> = report
             .hits
             .iter()
             .map(|hit| {
-                [
+                let mut row = vec![
                     hit.path.display().to_string(),
                     hit.findings.len().to_string(),
                     hit.detectors().join(","),
-                    if hit.protected { "protected" } else { "" }.into(),
-                ]
+                ];
+                if args.show_value {
+                    row.push(value_cell(&hit.findings));
+                }
+                row.push(if hit.protected { "protected" } else { "" }.into());
+                row
             })
             .collect();
-        let header = ["FILE", "FINDINGS", "DETECTORS", ""].map(String::from);
         write_table(&mut out, &header, &rows)?;
     }
     out.flush()?;
@@ -422,19 +462,54 @@ fn print(args: &ScanArgs, report: &Report) -> Result<()> {
     Ok(())
 }
 
+/// Values shown per file in the table; `--json` has them all.
+const TABLE_VALUES: usize = 3;
+/// Characters shown of each value in the table.
+const TABLE_VALUE_CHARS: usize = 60;
+
+/// The VALUE cell for a file's findings, cut short so one file with long or
+/// many values does not swamp the table.
+fn value_cell(findings: &[Finding]) -> String {
+    let values: Vec<&str> = findings
+        .iter()
+        .filter_map(|finding| finding.value.as_deref())
+        .collect();
+    let mut shown: Vec<String> = values
+        .iter()
+        .take(TABLE_VALUES)
+        .map(|value| {
+            if value.chars().count() > TABLE_VALUE_CHARS {
+                let head: String = value.chars().take(TABLE_VALUE_CHARS).collect();
+                format!("{head:?}…")
+            } else {
+                format!("{value:?}")
+            }
+        })
+        .collect();
+    if values.len() > TABLE_VALUES {
+        shown.push(format!("+{} more", values.len() - TABLE_VALUES));
+    }
+    shown.join(", ")
+}
+
 /// Write rows as columns aligned under `header`.
-fn write_table(out: &mut impl Write, header: &[String; 4], rows: &[[String; 4]]) -> Result<()> {
-    let mut widths = [0; 4];
-    for row in std::iter::once(header).chain(rows) {
+fn write_table(out: &mut impl Write, header: &[String], rows: &[Vec<String>]) -> Result<()> {
+    let mut widths = vec![0; header.len()];
+    for row in std::iter::once(header).chain(rows.iter().map(Vec::as_slice)) {
         for (width, cell) in widths.iter_mut().zip(row) {
             *width = (*width).max(cell.chars().count());
         }
     }
-    for row in std::iter::once(header).chain(rows) {
+    for row in std::iter::once(header).chain(rows.iter().map(Vec::as_slice)) {
         let line: Vec<String> = row
             .iter()
-            .zip(widths)
-            .map(|(cell, w)| format!("{cell:<w$}"))
+            .zip(&widths)
+            // Pad by hand: `{cell:<w$}` panics when a width exceeds u16::MAX,
+            // which a VALUE cell holding many long findings can.
+            .map(|(cell, w)| {
+                let pad = w.saturating_sub(cell.chars().count());
+                format!("{cell}{}", " ".repeat(pad))
+            })
             .collect();
         writeln!(out, "{}", line.join("  ").trim_end())?;
     }
@@ -459,7 +534,7 @@ fn parse_size(text: &str) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_size;
+    use super::{Finding, parse_size, value_cell, write_table};
 
     #[test]
     fn parses_sizes() {
@@ -469,5 +544,35 @@ mod tests {
         assert_eq!(parse_size("1G"), Ok(1 << 30));
         assert!(parse_size("ten").is_err());
         assert!(parse_size("").is_err());
+    }
+
+    #[test]
+    fn writes_cells_wider_than_u16() {
+        let wide = "x".repeat(70_000);
+        let header = vec!["A".to_string(), "B".to_string()];
+        let rows = vec![vec![wide.clone(), "y".to_string()]];
+        let mut out = Vec::new();
+        write_table(&mut out, &header, &rows).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(&format!("{wide}  y")));
+    }
+
+    #[test]
+    fn cuts_values_short_in_the_table() {
+        let finding = |value: String| Finding {
+            detector: "test".into(),
+            line: None,
+            value: Some(value),
+        };
+        let long = "a".repeat(100);
+        let findings: Vec<Finding> = [long, "b".into(), "c".into(), "d".into(), "e".into()]
+            .into_iter()
+            .map(finding)
+            .collect();
+        let cell = value_cell(&findings);
+        assert_eq!(
+            cell,
+            format!("{:?}…, \"b\", \"c\", +2 more", "a".repeat(60))
+        );
     }
 }
