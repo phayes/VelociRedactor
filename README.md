@@ -15,8 +15,6 @@ This README is the command-line manual. For the Rust library, see the [`veloci` 
 
 ## Install
 
-The latest release for this platform:
-
 ```console
 # Any platform:
 curl -fsSL https://raw.githubusercontent.com/phayes/veloci/master/scripts/install.sh | bash
