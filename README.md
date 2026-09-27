@@ -21,33 +21,31 @@ The latest release for this platform:
 # Any platform:
 curl -fsSL https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.sh | bash
 
-# Mac
-TODO
-# Linux (.deb)
-TODO
+# Homebrew (macOS and Linux)
+brew install phayes/tap/veloci-cli
+
+# Debian and Ubuntu (.deb, amd64 or arm64)
+VERSION=0.3.1 ARCH=$(dpkg --print-architecture)
+curl -fsSLO "https://github.com/phayes/velociredactor/releases/download/v$VERSION/veloci_${VERSION}_$ARCH.deb"
+sudo apt install "./veloci_${VERSION}_$ARCH.deb"
+
+# Cargo (rust)
+cargo install veloci-cli
+
+# Nix
+nix run github:phayes/velociredactor && nix profile install github:phayes/velociredactor
 ```
 
 ```powershell
-# Powershell
+# Windows: Powershell
 irm https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.ps1 | iex
+
+# Windows: Scoop
+scoop bucket add phayes https://github.com/phayes/scoop-bucket
+scoop install veloci
 ```
 
 The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
-
-```console
-cargo install veloci-cli
-```
-
-Earlier releases were published as the `velociredactor-cli` and `velociredactor` crates.
-
-With Nix:
-
-```console
-nix run github:phayes/velociredactor
-nix profile install github:phayes/velociredactor
-```
-
-The binary includes the default rules and all supported structured formats. It also includes the optional OpenAI Privacy Filter detector; that model is downloaded separately and is disabled in the default configuration.
 
 ## Redact input
 
