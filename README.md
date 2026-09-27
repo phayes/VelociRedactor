@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="Veloci Redactor logo" width="300"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/phayes/veloci/master/logo.png" alt="Veloci Redactor logo" width="300"></p>
 
 # Veloci Redactor
 
@@ -209,7 +209,7 @@ The configuration controls:
 - the detectors and their settings;
 - exact values, regular expressions, surrounding patterns, and key paths that are allowed.
 
-See [default_config.yml](https://github.com/phayes/velociredactor/blob/master/default_config.yml) for a documented example of a config file.
+See [default_config.yml](https://github.com/phayes/veloci/blob/master/default_config.yml) for a documented example of a config file.
 
 ## Privacy Filter model
 
@@ -232,7 +232,7 @@ Coding agents send whatever they read to their model. Veloci Redactor ships [age
 Install the plugin in Claude Code:
 
 ```console
-/plugin marketplace add phayes/velociredactor
+/plugin marketplace add phayes/veloci
 /plugin install veloci@veloci
 ```
 
