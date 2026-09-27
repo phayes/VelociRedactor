@@ -248,6 +248,69 @@ jobs:
           (cd plugin && zip -r -X ../dist/veloci-plugin.zip .)
           (cd dist && sha256sum veloci-plugin.zip > veloci-plugin.zip.sha256)
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veloci-plugin
+          path: dist/
+
+  # Windows machines may have no bash, so the plugin has to work there through
+  # bin/veloci.cmd alone: both the hook's command and the skills' `veloci`.
+  plugin-windows:
+    needs: plugin
+    strategy:
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: veloci-plugin
+          path: dist
+
+      - name: Unpack plugin and write a hook input
+        shell: pwsh
+        run: |
+          Expand-Archive dist/veloci-plugin.zip -DestinationPath plugin
+          New-Item -ItemType Directory proj | Out-Null
+          Set-Content proj/.env 'TOKEN=1'
+          @{
+            tool_name  = 'Read'
+            tool_input = @{ file_path = '.env' }
+            cwd        = (Resolve-Path proj).Path
+          } | ConvertTo-Json -Compress | Set-Content hook-input.json
+
+      - name: Run the launcher and hook from cmd, without bash
+        shell: cmd
+        run: |
+          set "PATH=%SystemRoot%\System32;%SystemRoot%"
+          where bash >nul 2>&1 && (echo bash is on PATH & exit /b 1)
+          set "PATH=%GITHUB_WORKSPACE%\plugin\bin;%PATH%"
+          call veloci --version || exit /b 1
+          cd proj
+          call veloci agent init --protect .env --enforce || exit /b 1
+          rem The hook's command as hooks.json writes it: an extensionless path.
+          cmd /d /s /c ""%GITHUB_WORKSPACE%\plugin/bin/veloci" agent hook" < ..\hook-input.json > ..\hook-output.json || exit /b 1
+
+      - name: Check the hook denied the read, and run veloci from PowerShell
+        shell: pwsh
+        run: |
+          $decision = (Get-Content hook-output.json | ConvertFrom-Json).hookSpecificOutput.permissionDecision
+          if ($decision -ne 'deny') { Get-Content hook-output.json; throw "hook did not deny the read" }
+          $env:PATH = "$env:GITHUB_WORKSPACE\plugin\bin;$env:SystemRoot\System32;$env:SystemRoot"
+          veloci --version
+          if ($LASTEXITCODE -ne 0) { throw "veloci exited $LASTEXITCODE" }
+
+  plugin-publish:
+    needs: [meta, plugin, plugin-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: veloci-plugin
+          path: dist
+
       - name: Upload plugin to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
