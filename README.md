@@ -164,10 +164,10 @@ Secrets already committed on lines the commit leaves alone are not reported; `ve
 
 ## Configuration
 
-Configuration defines what counts as sensitive. Print the complete built-in configuration to make an editable copy:
+Configuration defines what counts as sensitive. Create an editable copy of the complete built-in configuration as `veloci.yml` at the root of your Git repository (it asks first; `--yes` skips the question):
 
 ```console
-veloci config show > veloci.yml
+veloci init
 veloci config validate
 ```
 
@@ -301,6 +301,7 @@ veloci scan [OPTIONS] [PATH...]
     -d, --max-depth NUM    Limit directory depth
         --max-filesize SIZE  Skip larger files (default 10M)
 
+veloci init [--yes]            Create veloci.yml at the project root
 veloci githook [--config FILE] [--detector NAME]
 veloci formats
 veloci config show [--config FILE]

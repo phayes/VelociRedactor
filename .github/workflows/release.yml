@@ -341,3 +341,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  custom-extra-packages:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/extra-packages.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit

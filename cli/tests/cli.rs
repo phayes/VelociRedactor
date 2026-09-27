@@ -2142,3 +2142,49 @@ fn githook_fails_outside_a_repository() {
     let out = veloci_in(dir.path(), dir.path(), &["githook"], "");
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
 }
+
+#[test]
+fn init_writes_the_builtin_configuration_at_the_repository_root() {
+    let dir = agent_repo();
+    let out = veloci_in(&dir.path().join("src"), dir.path(), &["init"], "y\n");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("[Y] yes / [N] no"),
+        "{}",
+        stderr(&out)
+    );
+    let written = fs::read_to_string(dir.path().join("veloci.yml")).unwrap();
+    assert_eq!(written, BUILTIN);
+}
+
+#[test]
+fn init_with_yes_does_not_ask() {
+    let dir = agent_repo();
+    let out = veloci_in(dir.path(), dir.path(), &["init", "--yes"], "");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!stderr(&out).contains("[Y] yes"), "{}", stderr(&out));
+    assert!(dir.path().join("veloci.yml").is_file());
+}
+
+#[test]
+fn init_writes_nothing_unless_confirmed() {
+    for answer in ["n\n", "\n", ""] {
+        let dir = agent_repo();
+        let out = veloci_in(dir.path(), dir.path(), &["init"], answer);
+        assert_eq!(out.status.code(), Some(1), "{answer:?}: {}", stderr(&out));
+        assert!(!dir.path().join("veloci.yml").exists(), "{answer:?}");
+    }
+}
+
+#[test]
+fn init_refuses_to_replace_a_configuration() {
+    let dir = agent_repo();
+    fs::write(dir.path().join("VELOCI.yml"), "mine\n").unwrap();
+    let out = veloci_in(dir.path(), dir.path(), &["init", "--yes"], "");
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stderr(&out).contains("already exists"), "{}", stderr(&out));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("VELOCI.yml")).unwrap(),
+        "mine\n"
+    );
+}

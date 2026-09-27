@@ -13,6 +13,8 @@ installers = ["shell", "homebrew"]
 tap = "phayes/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+# Custom jobs to run after the release is announced (deb, scoop, Claude plugin)
+post-announce-jobs = ["./extra-packages"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in

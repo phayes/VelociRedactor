@@ -44,6 +44,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create `veloci.yml` at the project root from the built-in configuration.
+    ///
+    /// The project root is the Git repository root, or the current directory
+    /// outside a repository. Asks before writing unless `--yes` is given, and
+    /// refuses to replace an existing configuration there.
+    Init(InitArgs),
     /// Write the input with secrets replaced by redaction tokens.
     Redact(RedactArgs),
     /// List the secrets that would be redacted.
@@ -157,6 +163,13 @@ enum AgentCommand {
     /// Answer a Claude Code PreToolUse hook: read its JSON on standard input
     /// and deny reading a protected file when `enforce` is set.
     Hook(ConfigArg),
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Write the file without asking.
+    #[arg(short, long)]
+    yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -398,6 +411,7 @@ impl InputArgs {
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
+        Command::Init(args) => init(&args),
         Command::Redact(args) => redact(args),
         Command::List(args) => list(args),
         Command::Grep(args) => search::grep(args),
@@ -422,6 +436,44 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Write the built-in configuration to `veloci.yml` at the project root.
+fn init(args: &InitArgs) -> Result<ExitCode> {
+    let cwd = std::env::current_dir().context("determining the current directory")?;
+    let root = git_root(&cwd).unwrap_or(cwd);
+    if let Some(existing) = CONFIG_FILE_NAMES
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.exists())
+    {
+        bail!("{} already exists", existing.display());
+    }
+    let path = root.join(CONFIG_FILE_NAMES[0]);
+
+    if !args.yes && !confirm(&format!("Create {}?", path.display()))? {
+        eprintln!("nothing written");
+        return Ok(ExitCode::from(1));
+    }
+    fs::write(&path, Config::builtin_source())
+        .with_context(|| format!("writing {}", path.display()))?;
+    eprintln!("wrote {}", path.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Ask a yes-or-no question on standard error and read the answer from
+/// standard input. Anything but yes, including no answer at all, is no.
+fn confirm(question: &str) -> Result<bool> {
+    eprint!("{question} [Y] yes / [N] no: ");
+    io::stderr().flush().context("writing standard error")?;
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .context("reading standard input")?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn redact(args: RedactArgs) -> Result<ExitCode> {

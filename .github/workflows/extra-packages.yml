@@ -1,14 +1,51 @@
 name: Publish extra packages (deb, scoop, plugin)
 
-# Runs after cargo-dist's release.yml has created the GitHub Release and
-# uploaded all platform archives, so those assets are guaranteed to exist.
+# Called by cargo-dist's release.yml as a post-announce job (see
+# dist-workspace.toml), after the GitHub Release exists with all platform
+# archives. It can't trigger on `release: published` because that release is
+# created with GITHUB_TOKEN, and GITHUB_TOKEN events don't start workflows.
+#
+# workflow_dispatch backfills an existing release by tag.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build packages for (e.g. v0.3.0)
+        required: true
+        type: string
 
 jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - id: meta
+        env:
+          PLAN: ${{ inputs.plan }}
+          TAG_INPUT: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG_INPUT" ]; then
+            tag="$TAG_INPUT"
+            prerelease=$(gh release view "$tag" --repo "${{ github.repository }}" --json isPrerelease -q .isPrerelease)
+          else
+            tag=$(jq -r .announcement_tag <<<"$PLAN")
+            prerelease=$(jq -r .announcement_is_prerelease <<<"$PLAN")
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
   deb:
-    if: ${{ !github.event.release.prerelease }}
+    needs: meta
+    if: ${{ needs.meta.outputs.prerelease != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,7 +65,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir dl
-          gh release download "${{ github.event.release.tag_name }}" \
+          gh release download "${{ needs.meta.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --pattern "veloci-cli-${{ matrix.target }}.tar.xz" \
             --dir dl
@@ -41,7 +78,7 @@ jobs:
 
       - name: Build .deb
         run: |
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="${{ needs.meta.outputs.tag }}"
           VERSION="${TAG#v}"
           ./scripts/build-deb.sh veloci "$VERSION" "${{ matrix.arch }}" \
             extracted/veloci \
@@ -53,12 +90,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ needs.meta.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             veloci_*_${{ matrix.arch }}.deb
 
   scoop:
-    if: ${{ !github.event.release.prerelease }}
+    needs: meta
+    if: ${{ needs.meta.outputs.prerelease != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,14 +106,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir dl
-          gh release download "${{ github.event.release.tag_name }}" \
+          gh release download "${{ needs.meta.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --pattern "veloci-cli-x86_64-pc-windows-msvc.zip*" \
             --dir dl
 
       - name: Generate manifest
         run: |
-          TAG="${{ github.event.release.tag_name }}"
+          TAG="${{ needs.meta.outputs.tag }}"
           VERSION="${TAG#v}"
           SHA=$(awk '{print $1}' dl/veloci-cli-x86_64-pc-windows-msvc.zip.sha256)
           ./scripts/gen-scoop-manifest.sh veloci "$VERSION" \
@@ -99,7 +137,7 @@ jobs:
             echo "manifest unchanged, nothing to push"
             exit 0
           fi
-          git commit -m "veloci ${{ github.event.release.tag_name }}"
+          git commit -m "veloci ${{ needs.meta.outputs.tag }}"
           git push
 
   # cargo-dist's target list (aarch64-apple-darwin, x86_64-apple-darwin,
@@ -107,7 +145,8 @@ jobs:
   # doesn't include Windows ARM64, so the plugin's binary for that platform is
   # built here rather than lifted from a cargo-dist release archive.
   plugin-winarm64:
-    if: ${{ !github.event.release.prerelease }}
+    needs: meta
+    if: ${{ needs.meta.outputs.prerelease != 'true' }}
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v4
@@ -125,8 +164,8 @@ jobs:
           path: target/aarch64-pc-windows-msvc/release/veloci.exe
 
   plugin:
-    if: ${{ !github.event.release.prerelease }}
-    needs: plugin-winarm64
+    needs: [meta, plugin-winarm64]
+    if: ${{ needs.meta.outputs.prerelease != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -150,7 +189,7 @@ jobs:
             veloci-cli-aarch64-unknown-linux-gnu.tar.xz \
             veloci-cli-x86_64-unknown-linux-gnu.tar.xz \
             veloci-cli-x86_64-pc-windows-msvc.zip; do
-            gh release download "${{ github.event.release.tag_name }}" \
+            gh release download "${{ needs.meta.outputs.tag }}" \
               --repo "${{ github.repository }}" \
               --pattern "$asset" \
               --dir dl
@@ -180,7 +219,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.release.tag_name }}"
+          version="${{ needs.meta.outputs.tag }}"
           version="${version#v}"
 
           # Artifacts lose the executable bit; the launcher's is kept by git.
@@ -212,6 +251,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ needs.meta.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             dist/veloci-plugin.zip dist/veloci-plugin.zip.sha256
