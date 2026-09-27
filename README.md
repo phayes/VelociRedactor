@@ -128,6 +128,40 @@ veloci scan --unprotected       # only files the agent section leaves readable
 
 Each file is redacted in memory with the configuration found from its own directory, and allow lists apply. Unlike `grep`, hidden and `.gitignore`d files are scanned by default, since that is where secrets usually live; `--skip-hidden` and `--skip-ignored` leave them out. Git's own files and dependency and build directories (`node_modules`, `target`, `vendor`, `.venv`, `venv`, `__pycache__`, `dist`, `build`) are skipped unless `--all-dirs` is given, and so are binary files and files over `--max-filesize` (10M by default). Files that an `agent` section protects are marked `protected`. The exit status is 1 when any file holds secrets, 0 when none does, and 2 on an error with nothing found.
 
+## Block commits that add secrets
+
+`githook` is a Git pre-commit hook. It reads the staged diff for the lines the commit adds, then redacts each staged file whole, as it is in the index, so structured formats and allow lists see the full file. Secrets on added lines are listed by file, line and detector, never by value, and the commit is refused:
+
+```console
+$ git commit -m "Add client"
+veloci: refusing to commit secrets
+  src/client.py:3  entropy
+Review with `veloci list FILE`; allow false positives in veloci.yml,
+or bypass once with `git commit --no-verify`.
+```
+
+Install it in a repository:
+
+```sh
+printf '#!/bin/sh\nexec veloci githook\n' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+Or with the [pre-commit](https://pre-commit.com) framework, in `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: local
+    hooks:
+      - id: veloci
+        name: veloci
+        entry: veloci githook
+        language: system
+        pass_filenames: false
+```
+
+Secrets already committed on lines the commit leaves alone are not reported; `veloci scan` finds those. A renamed file counts as added whole. Binary files, files over 10M, submodules and symbolic links are skipped. The exit status is 1 when the commit adds secrets, 0 when it does not, and 2 on an error.
+
 ## Configuration
 
 Configuration defines what counts as sensitive. Print the complete built-in configuration to make an editable copy:
@@ -267,6 +301,7 @@ veloci scan [OPTIONS] [PATH...]
     -d, --max-depth NUM    Limit directory depth
         --max-filesize SIZE  Skip larger files (default 10M)
 
+veloci githook [--config FILE] [--detector NAME]
 veloci formats
 veloci config show [--config FILE]
 veloci config location [--config FILE]

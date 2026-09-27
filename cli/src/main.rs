@@ -1,3 +1,4 @@
+mod githook;
 mod scan;
 mod search;
 mod util;
@@ -68,6 +69,19 @@ enum Command {
     /// Exits 1 when any file holds secrets, 0 when none does, and 2 on an
     /// error with nothing found.
     Scan(scan::ScanArgs),
+    /// Refuse a commit that adds secrets: a Git pre-commit hook.
+    ///
+    /// Reads the staged diff for the lines the commit adds, then redacts
+    /// each staged file whole, as it is in the index, with the
+    /// configuration found from its own directory. Secrets on added lines
+    /// are listed by file, line and detector; values are never shown.
+    /// Secrets already committed on untouched lines are not reported.
+    ///
+    /// Exits 1 when the commit adds secrets, 0 when it does not, and 2 on
+    /// an error. Install it in a repository with `printf '#!/bin/sh\nexec
+    /// veloci githook\n' > .git/hooks/pre-commit && chmod +x
+    /// .git/hooks/pre-commit`.
+    Githook(githook::GithookArgs),
     /// List the supported input formats.
     Formats,
     /// Print the complete command-line manual.
@@ -388,6 +402,7 @@ fn main() -> ExitCode {
         Command::List(args) => list(args),
         Command::Grep(args) => search::grep(args),
         Command::Scan(args) => scan::run(args),
+        Command::Githook(args) => githook::run(args),
         Command::Formats => formats(),
         Command::Man => man(),
         Command::Config(ConfigCommand::Show(args)) => show_config(&args),

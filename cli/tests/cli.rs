@@ -2015,3 +2015,130 @@ fn a_disabled_detector_runs_only_when_named() {
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("privacy_filtr"), "{}", stderr(&out));
 }
+
+/// Run git in `dir`, isolated from the user's and system configuration.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(["-c", "user.name=Test", "-c", "user.email=test@test.invalid"])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A fresh repository, with its home directory beside it.
+fn git_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    git_in(&repo, &["init", "-q"]);
+    (dir, repo)
+}
+
+fn githook(dir: &tempfile::TempDir, repo: &Path) -> Output {
+    veloci_in(repo, dir.path(), &["githook"], "")
+}
+
+#[test]
+fn githook_refuses_a_staged_secret_without_showing_it() {
+    let (dir, repo) = git_repo();
+    fs::write(repo.join("clean.txt"), "nothing to see\n").unwrap();
+    fs::create_dir(repo.join("src")).unwrap();
+    fs::write(
+        repo.join("src/client.py"),
+        format!("import os\n\nKEY = \"{S}\"\n"),
+    )
+    .unwrap();
+    git_in(&repo, &["add", "."]);
+
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("src/client.py:3"), "{err}");
+    assert!(!err.contains("clean.txt"), "{err}");
+    assert!(!err.contains(S), "{err}");
+    assert!(stdout(&out).is_empty());
+}
+
+#[test]
+fn githook_passes_a_clean_commit() {
+    let (dir, repo) = git_repo();
+    fs::write(repo.join("clean.txt"), "nothing to see\n").unwrap();
+    git_in(&repo, &["add", "."]);
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+
+    // Nothing staged at all.
+    git_in(&repo, &["commit", "-q", "-m", "clean"]);
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
+#[test]
+fn githook_reports_only_added_lines() {
+    let (dir, repo) = git_repo();
+    let old = format!("KEY = \"{S}\"\n");
+    fs::write(repo.join("app.py"), &old).unwrap();
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-q", "--no-verify", "-m", "old"]);
+
+    // A clean line added beside a secret already committed.
+    fs::write(repo.join("app.py"), format!("{old}print('hi')\n")).unwrap();
+    git_in(&repo, &["add", "."]);
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+
+    // The secret used again on an added line.
+    fs::write(
+        repo.join("app.py"),
+        format!("{old}print('hi')\nOTHER = \"{S}\"\n"),
+    )
+    .unwrap();
+    git_in(&repo, &["add", "."]);
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains("app.py:3"), "{}", stderr(&out));
+}
+
+#[test]
+fn githook_judges_the_staged_content_not_the_working_tree() {
+    let (dir, repo) = git_repo();
+    let file = repo.join("app.py");
+
+    // Clean when staged; the secret is only in the working tree.
+    fs::write(&file, "print('hi')\n").unwrap();
+    git_in(&repo, &["add", "."]);
+    fs::write(&file, format!("KEY = \"{S}\"\n")).unwrap();
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+
+    // The secret staged, and since removed from the working tree.
+    git_in(&repo, &["add", "."]);
+    fs::write(&file, "print('hi')\n").unwrap();
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+}
+
+#[test]
+fn githook_applies_the_repository_configuration() {
+    let (dir, repo) = git_repo();
+    rules_config(&repo, &format!("allow:\n  values: [\"{S}\"]\n"));
+    fs::write(repo.join("app.py"), format!("KEY = \"{S}\"\n")).unwrap();
+    git_in(&repo, &["add", "app.py"]);
+    let out = githook(&dir, &repo);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
+#[test]
+fn githook_fails_outside_a_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = veloci_in(dir.path(), dir.path(), &["githook"], "");
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+}
