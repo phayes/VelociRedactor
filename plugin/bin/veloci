@@ -12,22 +12,22 @@ ARCH="$(uname -m)"
 
 case "$OS/$ARCH" in
   Darwin/arm64)
-    BIN="$ROOT/libexec/velociredactor-aarch64-apple-darwin"
+    BIN="$ROOT/libexec/veloci-aarch64-apple-darwin"
     ;;
   Darwin/x86_64)
-    BIN="$ROOT/libexec/velociredactor-x86_64-apple-darwin"
+    BIN="$ROOT/libexec/veloci-x86_64-apple-darwin"
     ;;
   Linux/aarch64|Linux/arm64)
-    BIN="$ROOT/libexec/velociredactor-aarch64-unknown-linux-gnu"
+    BIN="$ROOT/libexec/veloci-aarch64-unknown-linux-gnu"
     ;;
   Linux/x86_64)
-    BIN="$ROOT/libexec/velociredactor-x86_64-unknown-linux-gnu"
+    BIN="$ROOT/libexec/veloci-x86_64-unknown-linux-gnu"
     ;;
   MINGW*/ARM64|MINGW*/aarch64|MSYS*/ARM64|MSYS*/aarch64|CYGWIN*/ARM64|CYGWIN*/aarch64)
-    BIN="$ROOT/libexec/velociredactor-aarch64-pc-windows-msvc.exe"
+    BIN="$ROOT/libexec/veloci-aarch64-pc-windows-msvc.exe"
     ;;
   MINGW*/x86_64|MSYS*/x86_64|CYGWIN*/x86_64)
-    BIN="$ROOT/libexec/velociredactor-x86_64-pc-windows-msvc.exe"
+    BIN="$ROOT/libexec/veloci-x86_64-pc-windows-msvc.exe"
     ;;
   *)
     BIN=""
@@ -51,5 +51,5 @@ for dir in "${dirs[@]}"; do
 done
 
 echo "veloci: no binary for $OS/$ARCH in $ROOT/libexec, and none on PATH." >&2
-echo "Install it with: cargo install velociredactor-cli" >&2
+echo "Install it with: cargo install veloci-cli" >&2
 exit 127

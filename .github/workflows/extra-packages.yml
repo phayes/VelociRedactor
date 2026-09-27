@@ -30,14 +30,14 @@ jobs:
           mkdir dl
           gh release download "${{ github.event.release.tag_name }}" \
             --repo "${{ github.repository }}" \
-            --pattern "velociredactor-cli-${{ matrix.target }}.tar.xz" \
+            --pattern "veloci-cli-${{ matrix.target }}.tar.xz" \
             --dir dl
 
       - name: Extract binary
         run: |
           mkdir extracted
-          # cargo-dist wraps archive contents in a velociredactor-cli-<target>/ directory.
-          tar -xJf "dl/velociredactor-cli-${{ matrix.target }}.tar.xz" -C extracted --strip-components=1
+          # cargo-dist wraps archive contents in a veloci-cli-<target>/ directory.
+          tar -xJf "dl/veloci-cli-${{ matrix.target }}.tar.xz" -C extracted --strip-components=1
 
       - name: Build .deb
         run: |
@@ -70,20 +70,20 @@ jobs:
           mkdir dl
           gh release download "${{ github.event.release.tag_name }}" \
             --repo "${{ github.repository }}" \
-            --pattern "velociredactor-cli-x86_64-pc-windows-msvc.zip*" \
+            --pattern "veloci-cli-x86_64-pc-windows-msvc.zip*" \
             --dir dl
 
       - name: Generate manifest
         run: |
           TAG="${{ github.event.release.tag_name }}"
           VERSION="${TAG#v}"
-          SHA=$(awk '{print $1}' dl/velociredactor-cli-x86_64-pc-windows-msvc.zip.sha256)
+          SHA=$(awk '{print $1}' dl/veloci-cli-x86_64-pc-windows-msvc.zip.sha256)
           ./scripts/gen-scoop-manifest.sh veloci "$VERSION" \
             "Command-line interface for Veloci Redactor: redact secrets and PII from text and structured files" \
             "https://github.com/phayes/velociredactor" \
             "MIT" \
-            VelociRedactor "$TAG" \
-            velociredactor-cli-x86_64-pc-windows-msvc.zip veloci "$SHA"
+            velociredactor "$TAG" \
+            veloci-cli-x86_64-pc-windows-msvc.zip veloci "$SHA"
 
       - name: Publish to scoop-bucket
         env:
@@ -116,7 +116,7 @@ jobs:
         with:
           targets: aarch64-pc-windows-msvc
       - name: Build aarch64-pc-windows-msvc (plugin only)
-        run: cargo build --release --locked --package velociredactor-cli --target aarch64-pc-windows-msvc
+        run: cargo build --release --locked --package veloci-cli --target aarch64-pc-windows-msvc
         env:
           RUSTFLAGS: -C strip=symbols
       - uses: actions/upload-artifact@v4
@@ -145,11 +145,11 @@ jobs:
           set -euo pipefail
           mkdir dl
           for asset in \
-            velociredactor-cli-aarch64-apple-darwin.tar.xz \
-            velociredactor-cli-x86_64-apple-darwin.tar.xz \
-            velociredactor-cli-aarch64-unknown-linux-gnu.tar.xz \
-            velociredactor-cli-x86_64-unknown-linux-gnu.tar.xz \
-            velociredactor-cli-x86_64-pc-windows-msvc.zip; do
+            veloci-cli-aarch64-apple-darwin.tar.xz \
+            veloci-cli-x86_64-apple-darwin.tar.xz \
+            veloci-cli-aarch64-unknown-linux-gnu.tar.xz \
+            veloci-cli-x86_64-unknown-linux-gnu.tar.xz \
+            veloci-cli-x86_64-pc-windows-msvc.zip; do
             gh release download "${{ github.event.release.tag_name }}" \
               --repo "${{ github.repository }}" \
               --pattern "$asset" \
@@ -165,16 +165,16 @@ jobs:
           for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
             extract="extracted-${target}"
             mkdir -p "$extract"
-            tar -xJf "dl/velociredactor-cli-${target}.tar.xz" -C "$extract" --strip-components=1
-            cp "$extract/veloci" "plugin/libexec/velociredactor-${target}"
+            tar -xJf "dl/veloci-cli-${target}.tar.xz" -C "$extract" --strip-components=1
+            cp "$extract/veloci" "plugin/libexec/veloci-${target}"
           done
 
           extract="extracted-x86_64-pc-windows-msvc"
           mkdir -p "$extract"
-          unzip -q "dl/velociredactor-cli-x86_64-pc-windows-msvc.zip" -d "$extract"
-          cp "$extract"/*/veloci.exe "plugin/libexec/velociredactor-x86_64-pc-windows-msvc.exe"
+          unzip -q "dl/veloci-cli-x86_64-pc-windows-msvc.zip" -d "$extract"
+          cp "$extract"/*/veloci.exe "plugin/libexec/veloci-x86_64-pc-windows-msvc.exe"
 
-          cp winarm64/veloci.exe "plugin/libexec/velociredactor-aarch64-pc-windows-msvc.exe"
+          cp winarm64/veloci.exe "plugin/libexec/veloci-aarch64-pc-windows-msvc.exe"
 
       - name: Assemble plugin
         shell: bash
@@ -189,7 +189,7 @@ jobs:
             aarch64-apple-darwin x86_64-apple-darwin \
             aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu \
             aarch64-pc-windows-msvc.exe x86_64-pc-windows-msvc.exe; do
-            test -f "plugin/libexec/velociredactor-${target}" || { echo "missing velociredactor-${target}" >&2; exit 1; }
+            test -f "plugin/libexec/veloci-${target}" || { echo "missing veloci-${target}" >&2; exit 1; }
           done
 
           # Claude Code detects updates by plugin.json's version.
@@ -205,8 +205,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          (cd plugin && zip -r -X ../dist/velociredactor-plugin.zip .)
-          (cd dist && sha256sum velociredactor-plugin.zip > velociredactor-plugin.zip.sha256)
+          (cd plugin && zip -r -X ../dist/veloci-plugin.zip .)
+          (cd dist && sha256sum veloci-plugin.zip > veloci-plugin.zip.sha256)
 
       - name: Upload plugin to release
         env:
@@ -214,4 +214,4 @@ jobs:
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
             --repo "${{ github.repository }}" \
-            dist/velociredactor-plugin.zip dist/velociredactor-plugin.zip.sha256
+            dist/veloci-plugin.zip dist/veloci-plugin.zip.sha256

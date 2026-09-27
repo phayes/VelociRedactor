@@ -11,10 +11,10 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
-use velociredactor::agent::AgentPolicy;
-use velociredactor::config::Config;
-use velociredactor::detect::privacy_filter;
-use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor};
+use veloci::agent::AgentPolicy;
+use veloci::config::Config;
+use veloci::detect::privacy_filter;
+use veloci::{Allow, Finding, FormatHint, Redaction, Redactor};
 
 use crate::util::{
     CONFIG_FILE_NAMES, ConfigArg, SKIPPED_DIRS, WalkOptions, allowed_file_paths, allowed_files,
@@ -32,7 +32,7 @@ use crate::util::{
 ///     veloci config show > veloci.yml
 ///     veloci redact secrets.json
 ///
-/// Configuration is chosen in this order: `--config`, `$VELOCIREDACTOR_CONFIG`, a discovered `veloci.yml` or `VELOCI.yml`, and the built-in configuration.
+/// Configuration is chosen in this order: `--config`, `$VELOCI_CONFIG`, a discovered `veloci.yml` or `VELOCI.yml`, and the built-in configuration.
 /// Discovery stops at a Git repository root, the home directory when running inside it, or the filesystem root.
 #[derive(Debug, Parser)]
 #[command(name = "veloci", version, about, long_about)]
@@ -85,7 +85,7 @@ enum Command {
     /// agents read those files with `veloci redact FILE` and search
     /// them with `veloci grep`, never directly.
     ///
-    /// AI agents: run `veloci agent skill velociredactor` for complete
+    /// AI agents: run `veloci agent skill veloci` for complete
     /// instructions, then `veloci agent status` to see whether this project has
     /// chosen its files. If it has not, ask the user which files to protect
     /// before running `veloci agent init`. If it has, `veloci
@@ -135,7 +135,7 @@ enum AgentCommand {
     /// Print the instructions (Agent Skills) for AI agents using
     /// Veloci Redactor.
     ///
-    /// With no name, lists the skills; start with `velociredactor`, which
+    /// With no name, lists the skills; start with `veloci`, which
     /// covers reading, searching and editing protected files. The same skills install as a Claude Code plugin or
     /// into any agent's skills directory; see
     /// https://github.com/phayes/velociredactor/tree/master/plugin.
@@ -194,7 +194,7 @@ struct AgentInitArgs {
 
 #[derive(Debug, Args)]
 struct AgentSkillArgs {
-    /// The skill to print: `velociredactor` (reading, searching and editing
+    /// The skill to print: `veloci` (reading, searching and editing
     /// protected files), `setup` (choosing them), `config` (customizing
     /// redaction), or `share` (redacting before sharing). Lists the skills
     /// when omitted.
@@ -232,30 +232,30 @@ struct Skill {
 /// crate carries them when published.
 const SKILLS: &[Skill] = &[
     Skill {
-        name: "velociredactor",
+        name: "veloci",
         summary: "How to read, search and edit protected files. Start here.",
-        text: include_str!("../skills/velociredactor/SKILL.md"),
+        text: include_str!("../skills/veloci/SKILL.md"),
         references: &[],
     },
     Skill {
-        name: "velociredactor-setup",
+        name: "veloci-setup",
         summary: "Choosing which files to protect, on first use in a project.",
-        text: include_str!("../skills/velociredactor-setup/SKILL.md"),
+        text: include_str!("../skills/veloci-setup/SKILL.md"),
         references: &[],
     },
     Skill {
-        name: "velociredactor-config",
+        name: "veloci-config",
         summary: "Customizing what is redacted in veloci.yml.",
-        text: include_str!("../skills/velociredactor-config/SKILL.md"),
+        text: include_str!("../skills/veloci-config/SKILL.md"),
         references: &[(
             "references/config-reference.md",
-            include_str!("../skills/velociredactor-config/references/config-reference.md"),
+            include_str!("../skills/veloci-config/references/config-reference.md"),
         )],
     },
     Skill {
-        name: "velociredactor-share",
+        name: "veloci-share",
         summary: "Redacting text before it leaves the machine.",
-        text: include_str!("../skills/velociredactor-share/SKILL.md"),
+        text: include_str!("../skills/veloci-share/SKILL.md"),
         references: &[],
     },
 ];
@@ -346,7 +346,7 @@ impl InputArgs {
         self.file.as_deref().filter(|p| *p != Path::new("-"))
     }
 
-    /// The rules to apply, in order: `--config`, `$VELOCIREDACTOR_CONFIG`,
+    /// The rules to apply, in order: `--config`, `$VELOCI_CONFIG`,
     /// a discovered `veloci.yml`, or the built-in configuration.
     fn config(&self) -> Result<Config> {
         self.config.load()
@@ -786,10 +786,11 @@ fn agent_skill(args: &AgentSkillArgs) -> Result<ExitCode> {
         print!("{}", skill_list());
         return Ok(ExitCode::SUCCESS);
     };
-    let wanted = name.trim_start_matches("velociredactor-");
-    let Some(skill) = SKILLS.iter().find(|skill| {
-        skill.name == name || skill.name.strip_prefix("velociredactor-") == Some(wanted)
-    }) else {
+    let wanted = name.trim_start_matches("veloci-");
+    let Some(skill) = SKILLS
+        .iter()
+        .find(|skill| skill.name == name || skill.name.strip_prefix("veloci-") == Some(wanted))
+    else {
         bail!("no skill {name:?}\n\n{}", skill_list());
     };
 
@@ -813,9 +814,9 @@ fn skill_list() -> String {
         list.push_str(&format!("  {:<24} {}\n", skill.name, skill.summary));
     }
     list.push_str(
-        "\nPrint one with `veloci agent skill NAME`; the `velociredactor-`\n\
+        "\nPrint one with `veloci agent skill NAME`; the `veloci-`\n\
          prefix is optional. Start with:\n\n\
-         \x20   veloci agent skill velociredactor\n\n\
+         \x20   veloci agent skill veloci\n\n\
          To install them for an agent instead, copy them into its skills directory\n\
          or add the Claude Code plugin: https://github.com/phayes/velociredactor/tree/master/plugin\n",
     );
@@ -878,7 +879,7 @@ fn project_root(config: Option<&Path>) -> Result<PathBuf> {
 /// Ignored and hidden files are included, since that is where secrets
 /// usually are.
 fn find_candidates(root: &Path) -> Vec<Candidate> {
-    use velociredactor::agent::AgentConfig;
+    use veloci::agent::AgentConfig;
 
     const MAX_FILES: usize = 50_000;
     const MAX_EXAMPLES: usize = 3;

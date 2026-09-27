@@ -23,7 +23,7 @@ Usage: install.sh [--prefix DIR] [--version TAG]
   -h, --help     show this help
 
 Requires curl, plus sha256sum or shasum. Releases are glibc builds; Alpine
-and other musl systems should use: cargo install velociredactor-cli
+and other musl systems should use: cargo install veloci-cli
 EOF
 }
 
@@ -99,7 +99,7 @@ case "$os/$arch" in
     ;;
   *)
     echo "install.sh: no release for $os/$arch" >&2
-    echo "Install from source: cargo install velociredactor-cli" >&2
+    echo "Install from source: cargo install veloci-cli" >&2
     exit 1
     ;;
 esac
@@ -107,7 +107,7 @@ esac
 if [[ "$os" == Linux ]]; then
   if [[ -f /etc/alpine-release ]] || { command -v ldd >/dev/null && ldd --version 2>&1 | grep -qi musl; }; then
     echo "install.sh: published Linux binaries are glibc; this system looks like musl." >&2
-    echo "Install from source: cargo install velociredactor-cli" >&2
+    echo "Install from source: cargo install veloci-cli" >&2
     exit 1
   fi
 fi

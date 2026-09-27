@@ -14,15 +14,15 @@ use clap::Args;
 use ignore::overrides::OverrideBuilder;
 use ignore::{DirEntry, WalkBuilder};
 use rayon::iter::{ParallelBridge, ParallelIterator};
-use velociredactor::agent::AgentPolicy;
-use velociredactor::config::Config;
-use velociredactor::detect::DETECTOR_NAMES;
-use velociredactor::files::{FileGlobs, FileKeyPaths};
-use velociredactor::{Allow, Redactor};
+use veloci::agent::AgentPolicy;
+use veloci::config::Config;
+use veloci::detect::DETECTOR_NAMES;
+use veloci::files::{FileGlobs, FileKeyPaths};
+use veloci::{Allow, Redactor};
 
 /// Environment variable naming a configuration file that replaces the
 /// built-in one when `--config` is omitted.
-pub const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
+pub const CONFIG_ENV: &str = "VELOCI_CONFIG";
 
 /// Names accepted for a discovered configuration file, in preference order.
 pub const CONFIG_FILE_NAMES: [&str; 2] = ["veloci.yml", "VELOCI.yml"];
@@ -41,13 +41,13 @@ pub const SKIPPED_DIRS: &[&str] = &[
     "build",
 ];
 
-/// The configuration file, from `--config`, `$VELOCIREDACTOR_CONFIG`, or
+/// The configuration file, from `--config`, `$VELOCI_CONFIG`, or
 /// a `veloci.yml` found by walking from the current directory.
 #[derive(Debug, Clone, Args)]
 pub struct ConfigArg {
     /// Configuration file, replacing the built-in one.
     ///
-    /// `--config` wins over `$VELOCIREDACTOR_CONFIG`. When both are omitted,
+    /// `--config` wins over `$VELOCI_CONFIG`. When both are omitted,
     /// `veloci.yml` or `VELOCI.yml` is looked for in the
     /// current directory and its parents.
     #[arg(short, long, value_name = "FILE", env = CONFIG_ENV)]
@@ -90,12 +90,12 @@ impl DetectorArg {
 }
 
 impl ConfigArg {
-    /// The file `--config` or `$VELOCIREDACTOR_CONFIG` named, if either did.
+    /// The file `--config` or `$VELOCI_CONFIG` named, if either did.
     pub fn explicit_path(&self) -> Option<&Path> {
         self.config.as_deref().filter(|p| !p.as_os_str().is_empty())
     }
 
-    /// The file that will be used: `--config` or `$VELOCIREDACTOR_CONFIG`
+    /// The file that will be used: `--config` or `$VELOCI_CONFIG`
     /// if either named one, otherwise a discovered file, otherwise none
     /// (the built-in configuration).
     pub fn resolved_path(&self) -> Result<Option<PathBuf>> {
@@ -128,7 +128,7 @@ impl ConfigArg {
         }
     }
 
-    /// The rules to apply, in order: `--config`, `$VELOCIREDACTOR_CONFIG`,
+    /// The rules to apply, in order: `--config`, `$VELOCI_CONFIG`,
     /// a discovered file, or the built-in configuration; with the detectors
     /// `--detector` names turned on.
     pub fn load(&self) -> Result<Config> {

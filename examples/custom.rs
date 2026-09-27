@@ -2,9 +2,9 @@
 //!
 //! Run with `cargo run --example custom`.
 
-use velociredactor::detect::{Detection, Detector, LeafContext};
-use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
-use velociredactor::{Allow, FormatHint, Redactor};
+use veloci::detect::{Detection, Detector, LeafContext};
+use veloci::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+use veloci::{Allow, FormatHint, Redactor};
 
 /// Flags internal ticket numbers such as `TICKET-1234`.
 struct TicketDetector;

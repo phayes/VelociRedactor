@@ -4,15 +4,15 @@ These skills make AI coding agents read and search sensitive files through `velo
 
 | Skill | What it does |
 |---|---|
-| [`velociredactor`](skills/velociredactor/SKILL.md) | Reads protected or sensitive files with `veloci redact`, searches them with `veloci grep`, and edits them without ever writing a `[REDACTED-N]` token back. |
-| [`velociredactor-setup`](skills/velociredactor-setup/SKILL.md) | On first use in a project, asks which files to protect and records the answer in `veloci.yml`. |
-| [`velociredactor-config`](skills/velociredactor-config/SKILL.md) | Customizes detection: allow lists, custom patterns, PII, the Privacy Filter model, and the protected files. |
-| [`velociredactor-share`](skills/velociredactor-share/SKILL.md) | Redacts logs and other output before they go into issues, pull requests, chat or web tools. |
+| [`veloci`](skills/veloci/SKILL.md) | Reads protected or sensitive files with `veloci redact`, searches them with `veloci grep`, and edits them without ever writing a `[REDACTED-N]` token back. |
+| [`veloci-setup`](skills/veloci-setup/SKILL.md) | On first use in a project, asks which files to protect and records the answer in `veloci.yml`. |
+| [`veloci-config`](skills/veloci-config/SKILL.md) | Customizes detection: allow lists, custom patterns, PII, the Privacy Filter model, and the protected files. |
+| [`veloci-share`](skills/veloci-share/SKILL.md) | Redacts logs and other output before they go into issues, pull requests, chat or web tools. |
 
 Every skill needs the `veloci` binary on `PATH`. The Claude Code plugin bundles it for macOS, Linux and Windows (x86_64 and arm64). Other agents need it installed:
 
 ```console
-cargo install velociredactor-cli
+cargo install veloci-cli
 ```
 
 ## Installing
@@ -21,10 +21,10 @@ cargo install velociredactor-cli
 
 ```console
 /plugin marketplace add phayes/velociredactor
-/plugin install velociredactor@velociredactor
+/plugin install veloci@veloci
 ```
 
-The plugin installs the four skills, a `PreToolUse` hook and the `veloci` binary. Each release attaches the plugin as `velociredactor-plugin.zip`, and the marketplace installs the latest one. The hook does nothing unless a project turns on `enforce` (see below).
+The plugin installs the four skills, a `PreToolUse` hook and the `veloci` binary. Each release attaches the plugin as `veloci-plugin.zip`, and the marketplace installs the latest one. The hook does nothing unless a project turns on `enforce` (see below).
 
 ### Other agents
 
@@ -41,9 +41,9 @@ The skills follow the [Agent Skills](https://agentskills.io) standard. Copy the 
 For example, for a single project:
 
 ```console
-git clone --depth 1 https://github.com/phayes/velociredactor /tmp/velociredactor
+git clone --depth 1 https://github.com/phayes/velociredactor /tmp/veloci
 mkdir -p .agents/skills
-cp -R /tmp/velociredactor/plugin/skills/* .agents/skills/
+cp -R /tmp/veloci/plugin/skills/* .agents/skills/
 ```
 
 Only Claude Code gets the enforcing hook. In other agents the skills work by instruction alone.

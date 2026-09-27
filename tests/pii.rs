@@ -2,12 +2,12 @@ mod common;
 
 use common::*;
 #[cfg(feature = "json")]
-use velociredactor::Allow;
-use velociredactor::detect::{
+use veloci::Allow;
+use veloci::detect::{
     AddressDetector, Detector, EmailConfig, EmailDetector, LeafContext, PhoneDetector,
     RegexDetector,
 };
-use velociredactor::{FormatHint, Redactor, RedactorBuilder};
+use veloci::{FormatHint, Redactor, RedactorBuilder};
 
 fn matches(detector: &dyn Detector, s: &str) -> Vec<String> {
     let mut out = Vec::new();

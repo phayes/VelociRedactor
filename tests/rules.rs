@@ -4,12 +4,12 @@
 mod common;
 
 use common::HIGH_ENTROPY_SECRET as S;
-use velociredactor::config::Config;
-use velociredactor::detect::{
+use veloci::config::Config;
+use veloci::detect::{
     BETTERLEAKS_RULESET, DetectorConfig, DetectorEntry, EmailConfig, PathDetector, RegexConfig,
     RegexDetector, RulesetDetector, ValueDetector,
 };
-use velociredactor::{Allow, Finding, FormatHint, Redaction, Redactor, RedactorBuilder};
+use veloci::{Allow, Finding, FormatHint, Redaction, Redactor, RedactorBuilder};
 
 const DOC: &str = r#"{
   "users": [{"name": "Jane Roe", "ssn": "123-45-6789"}],
@@ -414,7 +414,7 @@ fn the_bundled_ruleset_is_a_detector_like_any_other() {
 
     let excluded = rules.exclude_rules(["github-pat"]);
     let redactor = RedactorBuilder::new()
-        .shared_format(std::sync::Arc::new(velociredactor::format::Json))
+        .shared_format(std::sync::Arc::new(veloci::format::Json))
         .detector(excluded)
         .build();
     assert_eq!(redact_with(&redactor, &doc), doc);

@@ -21,7 +21,7 @@
 //! veloci config show > my-config.yml
 //! ```
 //!
-//! The CLI reads that file from `--config`, then `$VELOCIREDACTOR_CONFIG`,
+//! The CLI reads that file from `--config`, then `$VELOCI_CONFIG`,
 //! then a `veloci.yml` discovered by walking from the current
 //! directory, then the built-in configuration.
 //!

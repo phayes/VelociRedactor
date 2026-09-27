@@ -1,5 +1,5 @@
 {
-  "name": "velociredactor",
+  "name": "veloci",
   "version": "0.1.0",
   "description": "Read sensitive files through Veloci Redactor so secrets and personal data never reach the model. Asks which files to protect on first use, and can block direct reads of them.",
   "author": {

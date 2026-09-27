@@ -311,14 +311,14 @@ const PRETTY_EXPORT: &str = r#"{
 
 #[test]
 fn pretty_printed_ids_are_preserved() {
-    assert!(velociredactor::detect::shannon_entropy(b"msg_cb99a444f001Ftd3kTVmr8XQHZ") > 4.5);
+    assert!(veloci::detect::shannon_entropy(b"msg_cb99a444f001Ftd3kTVmr8XQHZ") > 4.5);
     assert_eq!(json(PRETTY_EXPORT), PRETTY_EXPORT);
 }
 
 #[test]
 fn auto_detects_pretty_printed_json() {
     let redaction = redactor()
-        .redact(PRETTY_EXPORT.as_bytes(), velociredactor::FormatHint::Auto)
+        .redact(PRETTY_EXPORT.as_bytes(), veloci::FormatHint::Auto)
         .unwrap();
     assert_eq!(redaction.format(), "json");
     assert!(redaction.findings().is_empty());
@@ -454,7 +454,7 @@ fn jsonc_comments_and_single_quotes() {
 fn jsonl_is_auto_detected() {
     let content = format!("{{\"a\":\"{S}\"}}\n{{\"b\":\"ok\"}}\n");
     let redaction = redactor()
-        .redact(content.as_bytes(), velociredactor::FormatHint::Auto)
+        .redact(content.as_bytes(), veloci::FormatHint::Auto)
         .unwrap();
     assert_eq!(redaction.format(), "jsonl");
 }
@@ -465,13 +465,13 @@ fn invalid_json_falls_back_to_text_when_auto_detected_by_path() {
     let redaction = redactor()
         .redact(
             input.as_bytes(),
-            velociredactor::FormatHint::Path("x.json".as_ref()),
+            veloci::FormatHint::Path("x.json".as_ref()),
         )
         .unwrap();
     assert_eq!(redaction.format(), "text");
     assert_eq!(redaction.warnings().len(), 1);
     assert_eq!(
-        rendered(&redaction, &velociredactor::Allow::none()),
+        rendered(&redaction, &veloci::Allow::none()),
         "not json at all [REDACTED-1]"
     );
 }
@@ -480,7 +480,7 @@ fn invalid_json_falls_back_to_text_when_auto_detected_by_path() {
 fn invalid_json_errors_when_format_is_explicit() {
     assert!(
         redactor()
-            .redact(b"{not json", velociredactor::FormatHint::Name("json"))
+            .redact(b"{not json", veloci::FormatHint::Name("json"))
             .is_err()
     );
 }

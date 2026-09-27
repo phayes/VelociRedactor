@@ -23,7 +23,7 @@ use grep::regex::{RegexMatcher, RegexMatcherBuilder};
 use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::types::TypesBuilder;
 use termcolor::NoColor;
-use velociredactor::FormatHint;
+use veloci::FormatHint;
 
 use crate::util::{
     CONFIG_ENV, ConfigArg, DetectorArg, Fatal, RulesCache, WalkOptions, display_path,

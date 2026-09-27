@@ -50,7 +50,7 @@ function Get-WindowsTarget {
         '^(X64|Amd64|AMD64)$' { return 'x86_64-pc-windows-msvc' }
         '^(Arm64|ARM64)$' { return 'aarch64-pc-windows-msvc' }
         default {
-            throw "install.ps1: no release for Windows $arch. Install from source: cargo install velociredactor-cli"
+            throw "install.ps1: no release for Windows $arch. Install from source: cargo install veloci-cli"
         }
     }
 }

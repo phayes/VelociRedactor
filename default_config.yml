@@ -1,6 +1,6 @@
 # Veloci Redactor default configuration.
 #
-# This file is built into the binary. --config, then VELOCIREDACTOR_CONFIG,
+# This file is built into the binary. --config, then VELOCI_CONFIG,
 # then a veloci.yml found in the current directory or a parent,
 # each replaces it entirely: nothing is merged and nothing is inherited.
 # To write your own, start from a copy of this one:

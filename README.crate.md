@@ -1,8 +1,8 @@
 <p align="center"><img src="https://raw.githubusercontent.com/phayes/velociredactor/master/logo.png" alt="Veloci Redactor logo" width="300"></p>
 
-# velociredactor
+# veloci
 
-Veloci Redactor (`velociredactor`) is a Rust library for redacting secrets and personal data from text and structured files.
+Veloci Redactor (`veloci`) is a Rust library for redacting secrets and personal data from text and structured files. It was previously published as `velociredactor`.
 
 Each redacted value becomes a token named `[REDACTED-N]`. `N` numbers distinct secrets in order of first appearance, and equal values share a number. The token format is configurable: `{n}` is that number and `{reason}` is the detector that found the secret. Exact values and regular expressions can allow confirmed false positives.
 
@@ -16,13 +16,13 @@ Add the crate to a project:
 
 ```toml
 [dependencies]
-velociredactor = "0.1"
+veloci = "0.1"
 ```
 
 The default builder includes the built-in configuration:
 
 ```rust
-use velociredactor::{Allow, FormatHint, Redactor};
+use veloci::{Allow, FormatHint, Redactor};
 
 let redactor = Redactor::builder().build();
 let input = br#"{"db_password": "hunter2", "note": "hello"}"#;

@@ -1,6 +1,6 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use velociredactor::detect::{BETTERLEAKS_RULESET, Detector, LeafContext};
-use velociredactor::{Allow, FormatHint, Redactor};
+use veloci::detect::{BETTERLEAKS_RULESET, Detector, LeafContext};
+use veloci::{Allow, FormatHint, Redactor};
 
 const SECRET: &str = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA";
 

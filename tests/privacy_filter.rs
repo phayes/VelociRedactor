@@ -1,7 +1,7 @@
 //! The `privacy_filter` detector against the real model.
 //!
 //! The model is 2.6 GB, so these tests run only when
-//! `VELOCIREDACTOR_PF_MODEL` names a directory holding it, as downloaded by
+//! `VELOCI_PF_MODEL` names a directory holding it, as downloaded by
 //! `veloci privacy_filter download --dir DIR`. Build with `--release`: the
 //! model is unusably slow unoptimized.
 
@@ -9,14 +9,14 @@
 
 use std::sync::LazyLock;
 
-use velociredactor::detect::{PrivacyFilterConfig, PrivacyFilterDetector};
-use velociredactor::format::Json;
-use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder};
+use veloci::detect::{PrivacyFilterConfig, PrivacyFilterDetector};
+use veloci::format::Json;
+use veloci::{Allow, FormatHint, Redactor, RedactorBuilder};
 
 static REDACTOR: LazyLock<Option<Redactor>> = LazyLock::new(|| {
-    let dir = std::env::var_os("VELOCIREDACTOR_PF_MODEL")?;
+    let dir = std::env::var_os("VELOCI_PF_MODEL")?;
     let detector = PrivacyFilterDetector::new(&PrivacyFilterConfig::new(dir))
-        .expect("the model in VELOCIREDACTOR_PF_MODEL loads");
+        .expect("the model in VELOCI_PF_MODEL loads");
     Some(
         RedactorBuilder::new()
             .format(Json)
@@ -28,7 +28,7 @@ static REDACTOR: LazyLock<Option<Redactor>> = LazyLock::new(|| {
 fn redactor() -> Option<&'static Redactor> {
     let redactor = REDACTOR.as_ref();
     if redactor.is_none() {
-        eprintln!("skipped: set VELOCIREDACTOR_PF_MODEL to the model's directory");
+        eprintln!("skipped: set VELOCI_PF_MODEL to the model's directory");
     }
     redactor
 }
@@ -102,7 +102,7 @@ fn reads_long_documents_in_windows() {
         assert!(email.secret.ends_with("@gmail.com"), "{email:?}");
     }
     // Rows from the first and last windows are both found.
-    let row = |f: &&&velociredactor::Finding| {
+    let row = |f: &&&veloci::Finding| {
         let digits: String = f.secret.chars().filter(char::is_ascii_digit).collect();
         digits.parse::<usize>().unwrap()
     };

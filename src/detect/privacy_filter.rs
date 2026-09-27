@@ -615,10 +615,9 @@ impl Engine {
                     .map(Self::Cuda)
             }
             #[cfg(not(feature = "privacy-filter-cuda"))]
-            Device::Cuda(_) => Err(
-                "device cuda needs velociredactor built with the `privacy-filter-cuda` feature"
-                    .into(),
-            ),
+            Device::Cuda(_) => {
+                Err("device cuda needs veloci built with the `privacy-filter-cuda` feature".into())
+            }
         }
     }
 

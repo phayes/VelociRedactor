@@ -20,7 +20,7 @@
 mod common;
 
 use common::*;
-use velociredactor::{Allow, FormatHint};
+use veloci::{Allow, FormatHint};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
@@ -105,15 +105,12 @@ second: "[REDACTED-1]"
         .collect();
     let token = docs[0]["token"].as_str().unwrap();
     let replacement = redactor().replacement();
-    assert!(
-        velociredactor::is_redaction_token(replacement, token),
-        "{token}"
-    );
-    assert!(velociredactor::is_redaction_token(
+    assert!(veloci::is_redaction_token(replacement, token), "{token}");
+    assert!(veloci::is_redaction_token(
         replacement,
         docs[0]["flow"][1].as_str().unwrap()
     ));
-    assert!(velociredactor::is_redaction_token(
+    assert!(veloci::is_redaction_token(
         replacement,
         docs[1]["second"].as_str().unwrap()
     ));

@@ -1,5 +1,5 @@
 ---
-name: velociredactor-share
+name: veloci-share
 description: Redact secrets and personal data with Veloci Redactor before text leaves the machine. Use before pasting logs, stack traces, config, command output, or file excerpts into a GitHub issue or pull request, a commit message, a gist, a chat message, a bug report, a web search, or any other external service or tool, and when the user asks to scrub, sanitize, or anonymize text for sharing.
 license: MIT
 compatibility: Requires the veloci CLI on PATH.
@@ -51,6 +51,6 @@ Send the redacted version of each file it lists.
 ## Things to watch for
 
 - Redaction covers secrets and, when turned on, personal data. It doesn't remove internal hostnames, project names, or proprietary code. If content may be confidential beyond secrets, ask the user before sharing it at all.
-- Personal-data detection (`pii:*`, `privacy_filter`) is off unless the project turned it on. For customer data, check `veloci config show`. If needed, suggest the `velociredactor-config` skill to turn it on.
+- Personal-data detection (`pii:*`, `privacy_filter`) is off unless the project turned it on. For customer data, check `veloci config show`. If needed, suggest the `veloci-config` skill to turn it on.
 - `[REDACTED-N]` tokens are safe to share. Say so if a reader might think they're a bug. For example: "values replaced by [REDACTED-N] tokens".
 - Never use `--show-value` output, or the unredacted original, in anything you share.

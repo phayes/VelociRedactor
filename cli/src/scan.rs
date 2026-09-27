@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::json;
-use velociredactor::FormatHint;
+use veloci::FormatHint;
 
 use crate::util::{
     CONFIG_ENV, ConfigArg, DetectorArg, Fatal, RulesCache, SKIPPED_DIRS, WalkOptions,

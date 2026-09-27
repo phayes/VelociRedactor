@@ -18,7 +18,7 @@
 mod common;
 
 use common::HIGH_ENTROPY_SECRET as S;
-use velociredactor::{Allow, FormatHint, Redactor};
+use veloci::{Allow, FormatHint, Redactor};
 
 /// Redact `input` as `format`, with comment scanning on or off.
 fn redact(format: &str, input: &str, comments: bool) -> String {

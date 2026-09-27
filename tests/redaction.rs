@@ -4,17 +4,17 @@ mod common;
 
 use common::*;
 #[cfg(feature = "json")]
-use velociredactor::config::Config;
+use veloci::config::Config;
 #[cfg(feature = "json")]
-use velociredactor::detect::DetectorConfig;
-use velociredactor::detect::{
+use veloci::detect::DetectorConfig;
+use veloci::detect::{
     AddressDetector, Detection, Detector, DocumentValue, EmailDetector, LeafContext, PhoneDetector,
     RegexDetector,
 };
-use velociredactor::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
+use veloci::format::{Format, FormatError, Leaf, LeafVisitor, Splicer};
 #[cfg(feature = "json")]
-use velociredactor::policy::ScanAll;
-use velociredactor::{Allow, FormatHint, Redactor, RedactorBuilder, ReplacementFormat};
+use veloci::policy::ScanAll;
+use veloci::{Allow, FormatHint, Redactor, RedactorBuilder, ReplacementFormat};
 
 const S: &str = HIGH_ENTROPY_SECRET;
 
@@ -284,7 +284,7 @@ impl Detector for AfterFlag {
         &self,
         values: &[DocumentValue<'_>],
         out: &mut [Vec<Detection>],
-    ) -> Result<(), velociredactor::Error> {
+    ) -> Result<(), veloci::Error> {
         let mut flagged = false;
         for (value, out) in values.iter().zip(out) {
             if flagged {
@@ -300,7 +300,7 @@ impl Detector for AfterFlag {
 #[test]
 fn document_scoped_detectors_see_the_whole_document() {
     let redactor = RedactorBuilder::new()
-        .format(velociredactor::format::Json)
+        .format(veloci::format::Json)
         .detector(AfterFlag)
         .detector(Banana)
         .build();
@@ -320,7 +320,7 @@ fn document_scoped_detectors_see_the_whole_document() {
 #[test]
 fn document_scoped_detectors_are_given_only_scanned_values() {
     let redactor = RedactorBuilder::new()
-        .format(velociredactor::format::Json)
+        .format(veloci::format::Json)
         .detector(AfterFlag)
         .allow_paths(["skipped"])
         .build();
@@ -352,8 +352,8 @@ impl Detector for Broken {
         &self,
         _values: &[DocumentValue<'_>],
         _out: &mut [Vec<Detection>],
-    ) -> Result<(), velociredactor::Error> {
-        Err(velociredactor::Error::Detector {
+    ) -> Result<(), veloci::Error> {
+        Err(veloci::Error::Detector {
             name: self.name().into(),
             message: "no model".into(),
         })

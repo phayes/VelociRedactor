@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use velociredactor::detect::shannon_entropy;
+use veloci::detect::shannon_entropy;
 
 #[test]
 fn no_secrets_is_unchanged() {
@@ -470,9 +470,9 @@ fn invalid_utf8_is_passed_through() {
     let mut input = b"key \xff\xfe ".to_vec();
     input.extend_from_slice(HIGH_ENTROPY_SECRET.as_bytes());
     let redaction = redactor()
-        .redact(&input, velociredactor::FormatHint::Name("text"))
+        .redact(&input, veloci::FormatHint::Name("text"))
         .unwrap();
-    let out = redaction.render(&velociredactor::Allow::none()).unwrap();
+    let out = redaction.render(&veloci::Allow::none()).unwrap();
     let token = redaction.findings()[0].token();
     assert_eq!(
         out,

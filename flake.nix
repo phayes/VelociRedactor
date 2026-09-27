@@ -18,7 +18,7 @@
       mkPackage =
         pkgs:
         pkgs.rustPlatform.buildRustPackage {
-          pname = "velociredactor";
+          pname = "veloci";
           version = "0.1.1";
 
           src = lib.cleanSourceWith {
@@ -44,7 +44,7 @@
             pkgs.rustPlatform.bindgenHook
           ];
 
-          cargoBuildFlags = [ "--package" "velociredactor-cli" ];
+          cargoBuildFlags = [ "--package" "veloci-cli" ];
           cargoTestFlags = [ "--workspace" ];
 
           meta = {
@@ -57,9 +57,8 @@
     in
     {
       packages = forEachSystem (pkgs: rec {
-        velociredactor = mkPackage pkgs;
-        veloci = velociredactor;
-        default = velociredactor;
+        veloci = mkPackage pkgs;
+        default = veloci;
       });
 
       apps = forEachSystem (pkgs: {

@@ -8,10 +8,10 @@ Veloci Redactor aims:
  - ***Fast***, with parallel scanning and a very fast regex engine.
  - ***Exaustive***, with built-in support for all [Betterleaks](https://betterleaks.com) secret patterns, and optional support for [OpenAI's Privacy Filter](https://openai.com/index/introducing-openai-privacy-filter/).
  - ***Configurable*** with extensive configuration options.
- - ***Extensible*** with a matching [rust crate](https://crates.io/crates/velociredactor) and traits. 
+ - ***Extensible*** with a matching [rust crate](https://crates.io/crates/veloci) and traits. 
  - ***AI Native*** with built-in LLM skills so AI models can automatically start using `veloci` to avoid reading sensitive data into context.
 
-This README is the command-line manual. For the Rust library, see the [`velociredactor` crate](https://crates.io/crates/velociredactor), its [API documentation](https://docs.rs/velociredactor), and the [crate guide](README.crate.md).
+This README is the command-line manual. For the Rust library, see the [`veloci` crate](https://crates.io/crates/veloci), its [API documentation](https://docs.rs/veloci), and the [crate guide](README.crate.md).
 
 ## Install
 
@@ -28,8 +28,10 @@ irm https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/insta
 The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
 
 ```console
-cargo install velociredactor-cli
+cargo install veloci-cli
 ```
+
+Earlier releases were published as the `velociredactor-cli` and `velociredactor` crates.
 
 With Nix:
 
@@ -138,7 +140,7 @@ veloci config validate
 A configuration file replaces the built-in configuration completely. `veloci` chooses the configuration in this order:
 
 1. `--config FILE`
-2. `$VELOCIREDACTOR_CONFIG` environment variable
+2. `$VELOCI_CONFIG` environment variable
 3. `veloci.yml` or `VELOCI.yml` in the current directory or an eligible parent directory.
 4. the built-in configuration
 
@@ -184,7 +186,7 @@ Install the plugin in Claude Code:
 
 ```console
 /plugin marketplace add phayes/velociredactor
-/plugin install velociredactor@velociredactor
+/plugin install veloci@veloci
 ```
 
 The skills follow the [Agent Skills](https://agentskills.io) standard, so other agents can load them too. Copy the directories under `plugin/skills/` into the agent's skills directory, such as `.agents/skills/` for Codex. An agent with no skills installed can list and print them from the binary with `veloci agent skill`. See [plugin/README.md](plugin/README.md) for details.

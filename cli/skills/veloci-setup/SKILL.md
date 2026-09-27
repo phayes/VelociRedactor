@@ -1,5 +1,5 @@
 ---
-name: velociredactor-setup
+name: veloci-setup
 description: First-run setup of Veloci Redactor in a project. Asks the user which files AI agents must read redacted and records the answer in veloci.yml. Use when `veloci agent status` reports "not configured", when the user asks to set up, enable or install Veloci Redactor or redaction for a repo, or when they want to change which files are protected.
 license: MIT
 compatibility: Requires the veloci CLI on PATH.
@@ -103,4 +103,4 @@ Then tell the user:
 - that `veloci.yml` should be committed, so the whole team and every agent share the choice;
 - that they can change the choice any time by editing the `agent:` section (`protected`, `exclude`, `enforce`), or by asking you.
 
-To change an existing section later, edit the YAML directly and run `veloci config validate`. The file also holds the redaction rules, so keep the rest of it intact. The `velociredactor-config` skill covers those rules.
+To change an existing section later, edit the YAML directly and run `veloci config validate`. The file also holds the redaction rules, so keep the rest of it intact. The `veloci-config` skill covers those rules.

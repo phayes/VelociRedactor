@@ -25,8 +25,8 @@ use crate::render::{self, Allow, ReplacementFormat};
 /// run a different set, add exactly the ones you want to an empty builder:
 ///
 /// ```
-/// use velociredactor::RedactorBuilder;
-/// use velociredactor::detect::{BETTERLEAKS_RULESET, EmailDetector};
+/// use veloci::RedactorBuilder;
+/// use veloci::detect::{BETTERLEAKS_RULESET, EmailDetector};
 ///
 /// let redactor = RedactorBuilder::new()
 ///     .detector(BETTERLEAKS_RULESET.clone())

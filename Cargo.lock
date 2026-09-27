@@ -6334,7 +6334,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58c1dc449b873236909c7f325adf395071c209047737d831183e95c692413adf"
 
 [[package]]
-name = "velociredactor"
+name = "veloci"
 version = "0.1.1"
 dependencies = [
  "aho-corasick",
@@ -6373,7 +6373,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "velociredactor-cli"
+name = "veloci-cli"
 version = "0.1.1"
 dependencies = [
  "anyhow",
@@ -6385,7 +6385,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "termcolor",
- "velociredactor",
+ "veloci",
 ]
 
 [[package]]

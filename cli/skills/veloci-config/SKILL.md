@@ -1,5 +1,5 @@
 ---
-name: velociredactor-config
+name: veloci-config
 description: Customize what Veloci Redactor redacts by editing veloci.yml. Covers fixing false positives with allow lists, catching missed secrets with custom regexes, rulesets, exact values or key paths, turning on personal-data (PII) detection or the OpenAI Privacy Filter model, tuning entropy, and changing which files agents must read redacted. Use when redaction hides too much or too little, or the user asks to configure, tune, or extend Veloci Redactor.
 license: MIT
 compatibility: Requires the veloci CLI on PATH.
@@ -15,7 +15,7 @@ All behavior comes from one YAML file. You change it in three steps: **find the 
 veloci config location   # path, or [builtin-default]
 ```
 
-The config file is chosen in this order: `--config FILE`, then `$VELOCIREDACTOR_CONFIG`, then `veloci.yml` or `VELOCI.yml` in the current directory or a parent (stopping at the git root). If none of those exists, the built-in config is used.
+The config file is chosen in this order: `--config FILE`, then `$VELOCI_CONFIG`, then `veloci.yml` or `VELOCI.yml` in the current directory or a parent (stopping at the git root). If none of those exists, the built-in config is used.
 
 **A config file replaces the built-in configuration completely.** Nothing is merged. So never create a config from scratch with only the section you need. Start from the full built-in one:
 

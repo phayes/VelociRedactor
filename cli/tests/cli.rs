@@ -12,21 +12,21 @@ const BUILTIN: &str = include_str!("../../default_config.yml");
 const CLI_README: &str = include_str!("../README.md");
 
 /// Environment variable the binary reads for a configuration file.
-const CONFIG_ENV: &str = "VELOCIREDACTOR_CONFIG";
+const CONFIG_ENV: &str = "VELOCI_CONFIG";
 
-fn velociredactor(args: &[&str], stdin: &str) -> Output {
-    velociredactor_with(args, stdin, None)
+fn veloci(args: &[&str], stdin: &str) -> Output {
+    veloci_with(args, stdin, None)
 }
 
-fn velociredactor_with(args: &[&str], stdin: &str, config_env: Option<&str>) -> Output {
-    velociredactor_cmd(args, stdin, config_env, None, None)
+fn veloci_with(args: &[&str], stdin: &str, config_env: Option<&str>) -> Output {
+    veloci_cmd(args, stdin, config_env, None, None)
 }
 
-fn velociredactor_in(dir: &Path, home: &Path, args: &[&str], stdin: &str) -> Output {
-    velociredactor_cmd(args, stdin, None, Some(dir), Some(home))
+fn veloci_in(dir: &Path, home: &Path, args: &[&str], stdin: &str) -> Output {
+    veloci_cmd(args, stdin, None, Some(dir), Some(home))
 }
 
-fn velociredactor_cmd(
+fn veloci_cmd(
     args: &[&str],
     stdin: &str,
     config_env: Option<&str>,
@@ -59,11 +59,11 @@ fn velociredactor_cmd(
 }
 
 fn redact(args: &[&str], stdin: &str) -> Output {
-    velociredactor(&[&["redact"], args].concat(), stdin)
+    veloci(&[&["redact"], args].concat(), stdin)
 }
 
 fn list(args: &[&str], stdin: &str) -> Output {
-    velociredactor(&[&["list"], args].concat(), stdin)
+    veloci(&[&["list"], args].concat(), stdin)
 }
 
 fn stdout(output: &Output) -> String {
@@ -434,7 +434,7 @@ fn invalid_structured_input_falls_back_to_text() {
 
 #[test]
 fn list_formats() {
-    let out = velociredactor(&["formats"], "");
+    let out = veloci(&["formats"], "");
     let listing = stdout(&out);
     for name in [
         "json", "jsonl", "yaml", "toml", "xml", "hcl", "ini", "dotenv", "csv",
@@ -448,7 +448,7 @@ fn list_formats() {
 
 #[test]
 fn man_prints_the_cli_readme() {
-    let out = velociredactor(&["man"], "");
+    let out = veloci(&["man"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let manual = stdout(&out);
     let expected: String = CLI_README
@@ -459,16 +459,16 @@ fn man_prints_the_cli_readme() {
     assert!(!manual.contains("<img"));
     assert!(out.stderr.is_empty());
 
-    let help = velociredactor(&["--help"], "");
+    let help = veloci(&["--help"], "");
     assert!(help.status.success(), "{}", stderr(&help));
     assert!(stdout(&help).contains("man"), "{}", stdout(&help));
 }
 
 #[test]
 fn subcommand_is_required() {
-    let out = velociredactor(&[], "");
+    let out = veloci(&[], "");
     assert!(!out.status.success());
-    let out = velociredactor(&["--allow-by-key", "x"], "");
+    let out = veloci(&["--allow-by-key", "x"], "");
     assert!(!out.status.success());
 }
 
@@ -712,7 +712,7 @@ fn config_resolves_rule_paths_relative_to_itself() {
 
 #[test]
 fn the_config_subcommand_prints_a_usable_starting_point() {
-    let out = velociredactor(&["config", "show"], "");
+    let out = veloci(&["config", "show"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let printed = stdout(&out);
     assert_eq!(
@@ -738,15 +738,15 @@ fn config_show_prints_a_given_file() {
     let path = dir.path().join("mine.yml");
     fs::write(&path, "comments: true\n").unwrap();
 
-    let out = velociredactor(&["config", "show", "--config", path.to_str().unwrap()], "");
+    let out = veloci(&["config", "show", "--config", path.to_str().unwrap()], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "comments: true\n");
 
-    let out = velociredactor_with(&["config", "show"], "", Some(path.to_str().unwrap()));
+    let out = veloci_with(&["config", "show"], "", Some(path.to_str().unwrap()));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "comments: true\n");
 
-    let out = velociredactor(&["config", "show", path.to_str().unwrap()], "");
+    let out = veloci(&["config", "show", path.to_str().unwrap()], "");
     assert_eq!(out.status.code(), Some(2));
     assert!(
         stderr(&out).contains("unexpected argument"),
@@ -757,20 +757,20 @@ fn config_show_prints_a_given_file() {
 
 #[test]
 fn config_location_names_the_file_or_the_builtin() {
-    let out = velociredactor(&["config", "location"], "");
+    let out = veloci(&["config", "location"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "[builtin-default]\n");
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mine.yml");
-    let out = velociredactor(
+    let out = veloci(
         &["config", "location", "--config", path.to_str().unwrap()],
         "",
     );
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), format!("{}\n", path.display()));
 
-    let out = velociredactor_with(&["config", "location"], "", Some(path.to_str().unwrap()));
+    let out = veloci_with(&["config", "location"], "", Some(path.to_str().unwrap()));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), format!("{}\n", path.display()));
 }
@@ -783,7 +783,7 @@ fn config_flag_overrides_the_environment() {
     fs::write(&from_env, "from-env\n").unwrap();
     fs::write(&from_flag, "from-flag\n").unwrap();
 
-    let out = velociredactor_with(
+    let out = veloci_with(
         &["config", "show", "--config", from_flag.to_str().unwrap()],
         "",
         Some(from_env.to_str().unwrap()),
@@ -791,7 +791,7 @@ fn config_flag_overrides_the_environment() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "from-flag\n");
 
-    let out = velociredactor_with(
+    let out = veloci_with(
         &[
             "config",
             "location",
@@ -811,12 +811,12 @@ fn redact_reads_the_config_environment() {
     let env_config = rules_config(env_dir.path(), "allow:\n  values: [hunter2]\n");
     let input = "DB_PASSWORD=hunter2\n";
 
-    let out = velociredactor_with(&["redact"], input, Some(&env_config));
+    let out = veloci_with(&["redact"], input, Some(&env_config));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), input);
 
     let flag = rules_config(flag_dir.path(), "allow:\n  values: []\n");
-    let out = velociredactor_with(&["redact", "--config", &flag], input, Some(&env_config));
+    let out = veloci_with(&["redact", "--config", &flag], input, Some(&env_config));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "DB_PASSWORD=[REDACTED-1]\n");
 }
@@ -827,7 +827,7 @@ fn discovers_veloci_yml_from_the_current_directory() {
     let path = rules_config(dir.path(), "allow:\n  values: [hunter2]\n");
     let input = "DB_PASSWORD=hunter2\n";
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["config", "location"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["config", "location"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let located = stdout(&out);
     assert_eq!(
@@ -835,11 +835,11 @@ fn discovers_veloci_yml_from_the_current_directory() {
         fs::canonicalize(&path).unwrap()
     );
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["redact"], input);
+    let out = veloci_in(dir.path(), dir.path(), &["redact"], input);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), input);
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["config", "show"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["config", "show"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), fs::read_to_string(&path).unwrap());
 }
@@ -856,7 +856,7 @@ fn discovers_uppercase_name_by_walking_to_a_parent() {
         "allow:\n  values: [hunter2]\n",
     );
 
-    let out = velociredactor_in(&child, dir.path(), &["config", "location"], "");
+    let out = veloci_in(&child, dir.path(), &["config", "location"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let located = stdout(&out);
     assert_ne!(located, "[builtin-default]\n");
@@ -865,7 +865,7 @@ fn discovers_uppercase_name_by_walking_to_a_parent() {
         "{located}"
     );
 
-    let out = velociredactor_in(&child, dir.path(), &["redact"], "DB_PASSWORD=hunter2\n");
+    let out = veloci_in(&child, dir.path(), &["redact"], "DB_PASSWORD=hunter2\n");
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "DB_PASSWORD=hunter2\n");
 }
@@ -882,7 +882,7 @@ fn command_line_and_environment_override_discovery() {
     fs::write(&from_env, "from-env\n").unwrap();
 
     // `--config` wins over a file sitting in the current directory.
-    let out = velociredactor_cmd(
+    let out = veloci_cmd(
         &["config", "show", "--config", from_flag.to_str().unwrap()],
         "",
         None,
@@ -892,8 +892,8 @@ fn command_line_and_environment_override_discovery() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "from-flag\n");
 
-    // `$VELOCIREDACTOR_CONFIG` wins over discovery, and loses to `--config`.
-    let out = velociredactor_cmd(
+    // `$VELOCI_CONFIG` wins over discovery, and loses to `--config`.
+    let out = veloci_cmd(
         &["config", "show"],
         "",
         Some(from_env.to_str().unwrap()),
@@ -903,7 +903,7 @@ fn command_line_and_environment_override_discovery() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "from-env\n");
 
-    let out = velociredactor_cmd(
+    let out = veloci_cmd(
         &[
             "config",
             "location",
@@ -921,32 +921,32 @@ fn command_line_and_environment_override_discovery() {
 #[test]
 fn discovery_falls_back_to_the_builtin() {
     let dir = tempfile::tempdir().unwrap();
-    let out = velociredactor_in(dir.path(), dir.path(), &["config", "location"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["config", "location"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "[builtin-default]\n");
 }
 
 #[test]
 fn config_validate_accepts_a_usable_file_and_rejects_a_broken_one() {
-    let out = velociredactor(&["config", "validate"], "");
+    let out = veloci(&["config", "validate"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).is_empty());
 
     let dir = tempfile::tempdir().unwrap();
     let ok = dir.path().join("ok.yml");
     fs::write(&ok, BUILTIN).unwrap();
-    let out = velociredactor(
+    let out = veloci(
         &["config", "validate", "--config", ok.to_str().unwrap()],
         "",
     );
     assert!(out.status.success(), "{}", stderr(&out));
 
-    let out = velociredactor_with(&["config", "validate"], "", Some(ok.to_str().unwrap()));
+    let out = veloci_with(&["config", "validate"], "", Some(ok.to_str().unwrap()));
     assert!(out.status.success(), "{}", stderr(&out));
 
     let broken = dir.path().join("broken.yml");
     fs::write(&broken, "allow:\n  values: [hunter2]\n").unwrap();
-    let out = velociredactor(
+    let out = veloci(
         &["config", "validate", "--config", broken.to_str().unwrap()],
         "",
     );
@@ -955,7 +955,7 @@ fn config_validate_accepts_a_usable_file_and_rejects_a_broken_one() {
 
     let unknown = dir.path().join("unknown.yml");
     fs::write(&unknown, "nonsense: 1\n").unwrap();
-    let out = velociredactor_with(&["config", "validate"], "", Some(unknown.to_str().unwrap()));
+    let out = veloci_with(&["config", "validate"], "", Some(unknown.to_str().unwrap()));
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("unknown field"), "{}", stderr(&out));
 
@@ -964,7 +964,7 @@ fn config_validate_accepts_a_usable_file_and_rejects_a_broken_one() {
         &[extra_detector("  - regex:\n      patterns: ['unclosed(']")],
         "allow:\n  regexes: ['also(']\n",
     );
-    let out = velociredactor(&["config", "validate", "--config", &invalid], "");
+    let out = veloci(&["config", "validate", "--config", &invalid], "");
     assert_eq!(out.status.code(), Some(2));
     let err = stderr(&out);
     assert!(err.contains("does not compile"), "{err}");
@@ -973,7 +973,7 @@ fn config_validate_accepts_a_usable_file_and_rejects_a_broken_one() {
 
 #[test]
 fn config_requires_a_subcommand() {
-    let out = velociredactor(&["config"], "");
+    let out = veloci(&["config"], "");
     assert!(!out.status.success());
     assert!(stderr(&out).contains("show"), "{}", stderr(&out));
 }
@@ -1018,7 +1018,7 @@ fn agent_repo() -> tempfile::TempDir {
 }
 
 fn agent_init(dir: &Path, args: &[&str]) -> Output {
-    velociredactor_in(dir, dir, &[&["agent", "init"], args].concat(), "")
+    veloci_in(dir, dir, &[&["agent", "init"], args].concat(), "")
 }
 
 /// Claude Code's PreToolUse input for reading `file` from `cwd`.
@@ -1035,7 +1035,7 @@ fn hook_input(cwd: &Path, tool: &str, key: &str, file: &str) -> String {
 #[test]
 fn agent_status_reports_an_unconfigured_project() {
     let dir = agent_repo();
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(status["configured"], false);
@@ -1043,7 +1043,7 @@ fn agent_status_reports_an_unconfigured_project() {
 
     // A configuration without an agent section is not a choice either.
     rules_config(dir.path(), "");
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("not configured"), "{}", stdout(&out));
 }
@@ -1071,7 +1071,7 @@ fn agent_init_writes_a_complete_configuration() {
         "the built-in rules are kept, comments and all"
     );
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(status["configured"], true);
     assert_eq!(status["protected"], serde_json::json!([".env*", "*.pem"]));
@@ -1079,10 +1079,10 @@ fn agent_init_writes_a_complete_configuration() {
     assert_eq!(status["enforce"], true);
 
     // Redaction is unchanged by the new section.
-    let out = velociredactor_in(dir.path(), dir.path(), &["redact", ".env"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["redact", ".env"], "");
     assert_eq!(stdout(&out), "DB_PASSWORD=[REDACTED-1]\n");
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["config", "validate"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["config", "validate"], "");
     assert!(out.status.success(), "{}", stderr(&out));
 }
 
@@ -1107,7 +1107,7 @@ fn agent_init_appends_to_an_existing_configuration() {
         written.contains("values: [hunter2]"),
         "existing rules are kept"
     );
-    let out = velociredactor_in(dir.path(), dir.path(), &["redact", ".env"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["redact", ".env"], "");
     assert_eq!(stdout(&out), "DB_PASSWORD=hunter2\n");
 }
 
@@ -1147,7 +1147,7 @@ fn agent_check_exits_1_for_protected_files() {
         .success()
     );
 
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "check", ".env", ".env.example", "src/main.rs"],
@@ -1156,7 +1156,7 @@ fn agent_check_exits_1_for_protected_files() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(stdout(&out), ".env\n");
 
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "check", "src/main.rs"],
@@ -1169,7 +1169,7 @@ fn agent_check_exits_1_for_protected_files() {
     // command runs from.
     let elsewhere = tempfile::tempdir().unwrap();
     let env = dir.path().join(".env");
-    let out = velociredactor_in(
+    let out = veloci_in(
         elsewhere.path(),
         elsewhere.path(),
         &["agent", "check", env.to_str().unwrap()],
@@ -1181,7 +1181,7 @@ fn agent_check_exits_1_for_protected_files() {
 #[test]
 fn agent_check_protects_nothing_without_an_agent_section() {
     let dir = agent_repo();
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "check", ".env"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "check", ".env"], "");
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }
 
@@ -1199,7 +1199,7 @@ fn agent_hook_denies_protected_reads_only_when_enforced() {
         ("Read", "file_path", "veloci redact"),
         ("Grep", "path", "veloci grep"),
     ] {
-        let out = velociredactor_in(
+        let out = veloci_in(
             other.path(),
             other.path(),
             &["agent", "hook"],
@@ -1210,7 +1210,7 @@ fn agent_hook_denies_protected_reads_only_when_enforced() {
         assert!(reason.contains(instead), "{reason}");
     }
 
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "hook"],
@@ -1226,7 +1226,7 @@ fn agent_hook_denies_protected_reads_only_when_enforced() {
             .status
             .success()
     );
-    let out = velociredactor_in(
+    let out = veloci_in(
         unenforced.path(),
         unenforced.path(),
         &["agent", "hook"],
@@ -1270,7 +1270,7 @@ fn agent_hook_denies_searching_a_directory_holding_protected_files() {
             "cwd": dir.path(),
             "tool_input": input,
         });
-        velociredactor_in(
+        veloci_in(
             dir.path(),
             dir.path(),
             &["agent", "hook"],
@@ -1307,11 +1307,11 @@ fn agent_hook_denies_searching_a_directory_holding_protected_files() {
 #[test]
 fn agent_hook_failures_do_not_block() {
     let dir = agent_repo();
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "hook"], "not json");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "hook"], "not json");
     assert_eq!(out.status.code(), Some(1));
 
     fs::write(dir.path().join("veloci.yml"), "nonsense: 1\n").unwrap();
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "hook"],
@@ -1340,7 +1340,7 @@ fn grep_repo() -> tempfile::TempDir {
 }
 
 fn grep_in(dir: &Path, args: &[&str]) -> Output {
-    velociredactor_in(dir, dir, &[&["grep"], args].concat(), "")
+    veloci_in(dir, dir, &[&["grep"], args].concat(), "")
 }
 
 #[test]
@@ -1423,7 +1423,7 @@ fn grep_honors_ignore_files_and_hidden_files() {
 
 #[test]
 fn grep_reads_standard_input() {
-    let out = velociredactor(&["grep", "token", "-"], &format!("token: {S}\nother\n"));
+    let out = veloci(&["grep", "token", "-"], &format!("token: {S}\nother\n"));
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "1:token: [REDACTED-1]\n");
 }
@@ -1516,7 +1516,7 @@ fn agent_status_suggests_candidates_by_name() {
     fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
     fs::write(dir.path().join("node_modules/pkg/test.pem"), "").unwrap();
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("not configured"), "{text}");
@@ -1530,7 +1530,7 @@ fn agent_status_suggests_candidates_by_name() {
     assert!(text.contains("veloci agent init"), "{text}");
     assert!(text.contains("veloci agent skill setup"), "{text}");
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     let env = status["suggested"]
         .as_array()
@@ -1547,7 +1547,7 @@ fn agent_status_suggests_candidates_by_name() {
             .status
             .success()
     );
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(status["suggested"], serde_json::json!([]));
 }
@@ -1566,7 +1566,7 @@ fn agent_init_without_patterns_explains_what_to_do() {
     assert!(text.contains("ask the user"), "{text}");
     assert!(!dir.path().join("veloci.yml").exists());
 
-    let out = velociredactor(&["agent", "init", "--help"], "");
+    let out = veloci(&["agent", "init", "--help"], "");
     assert!(out.status.success());
     assert!(
         stdout(&out).contains(".gitignore conventions"),
@@ -1577,44 +1577,33 @@ fn agent_init_without_patterns_explains_what_to_do() {
 
 #[test]
 fn agent_skill_prints_the_skills() {
-    let skill = |args: &[&str]| velociredactor(&[&["agent", "skill"], args].concat(), "");
-    let main = include_str!("../skills/velociredactor/SKILL.md");
+    let skill = |args: &[&str]| veloci(&[&["agent", "skill"], args].concat(), "");
+    let main = include_str!("../skills/veloci/SKILL.md");
 
     // Without a name, the skills are listed with where to start.
     let out = skill(&[]);
     assert!(out.status.success(), "{}", stderr(&out));
     let list = stdout(&out);
-    for name in [
-        "velociredactor-setup",
-        "velociredactor-config",
-        "velociredactor-share",
-    ] {
+    for name in ["veloci-setup", "veloci-config", "veloci-share"] {
         assert!(list.contains(name), "{list}");
     }
     assert!(list.contains("veloci agent skill NAME"), "{list}");
-    assert!(
-        list.contains("veloci agent skill velociredactor\n"),
-        "{list}"
-    );
+    assert!(list.contains("veloci agent skill veloci\n"), "{list}");
 
-    assert_eq!(stdout(&skill(&["velociredactor"])), main);
+    assert_eq!(stdout(&skill(&["veloci"])), main);
 
-    let setup = include_str!("../skills/velociredactor-setup/SKILL.md");
+    let setup = include_str!("../skills/veloci-setup/SKILL.md");
     assert_eq!(stdout(&skill(&["setup"])), setup);
-    assert_eq!(stdout(&skill(&["velociredactor-setup"])), setup);
+    assert_eq!(stdout(&skill(&["veloci-setup"])), setup);
 
     // A skill's references come after it.
     let config = stdout(&skill(&["config"]));
-    assert!(config.starts_with(include_str!("../skills/velociredactor-config/SKILL.md")));
+    assert!(config.starts_with(include_str!("../skills/veloci-config/SKILL.md")));
     assert!(config.contains("# veloci.yml reference"), "{config}");
 
     let out = skill(&["nope"]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(
-        stderr(&out).contains("velociredactor-share"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(stderr(&out).contains("veloci-share"), "{}", stderr(&out));
 }
 
 /// `cli/skills` is a copy of `plugin/skills`, so the published crate can
@@ -1679,7 +1668,7 @@ fn scan_repo() -> tempfile::TempDir {
 }
 
 fn scan_in(dir: &Path, args: &[&str]) -> Output {
-    velociredactor_in(dir, dir, &[&["scan"], args].concat(), "")
+    veloci_in(dir, dir, &[&["scan"], args].concat(), "")
 }
 
 #[test]
@@ -1753,7 +1742,7 @@ fn allowed_files_are_never_redacted() {
     fs::write(root.join(".env"), &secret).unwrap();
     fs::write(root.join(".env.example"), &secret).unwrap();
     fs::write(root.join("tests/fixtures/app.env"), &secret).unwrap();
-    let run = |args: &[&str]| velociredactor_in(root, root, args, &secret);
+    let run = |args: &[&str]| veloci_in(root, root, args, &secret);
 
     for file in [".env.example", "tests/fixtures/app.env"] {
         let out = run(&["redact", file]);
@@ -1790,7 +1779,7 @@ fn allowed_file_paths_apply_to_their_files_only() {
     for file in ["example.yaml", "example.prod.yml", "other.yaml"] {
         fs::write(root.join(file), &document).unwrap();
     }
-    let run = |args: &[&str]| velociredactor_in(root, root, args, &document);
+    let run = |args: &[&str]| veloci_in(root, root, args, &document);
 
     for file in ["example.yaml", "example.prod.yml"] {
         let out = run(&["redact", file]);
@@ -1823,10 +1812,10 @@ fn allowed_file_paths_apply_to_their_files_only() {
 fn a_file_path_without_a_separator_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let config = rules_config(dir.path(), "allow:\n  file_paths: [example.yaml]\n");
-    let out = velociredactor(&["config", "validate", "--config", &config], "");
+    let out = veloci(&["config", "validate", "--config", &config], "");
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("FILE#KEY.PATH"), "{}", stderr(&out));
-    let out = velociredactor(&["redact", "--config", &config], "x\n");
+    let out = veloci(&["redact", "--config", &config], "x\n");
     assert_eq!(out.status.code(), Some(2));
 }
 
@@ -1895,14 +1884,14 @@ fn scan_fails_on_a_broken_configuration() {
 #[test]
 fn agent_status_lists_files_whose_contents_hold_secrets() {
     let dir = scan_repo();
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
     assert!(!text.contains(S), "{text}");
     assert!(text.contains("contents hold likely secrets"), "{text}");
     assert!(text.contains("config/settings.yml"), "{text}");
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     let paths: Vec<_> = status["secrets"]
         .as_array()
@@ -1918,13 +1907,13 @@ fn agent_status_lists_files_whose_contents_hold_secrets() {
             .status
             .success()
     );
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(status["scanned"], true);
     assert_eq!(status["secrets"][0]["path"], "config/settings.yml");
     assert_eq!(status["secrets"].as_array().unwrap().len(), 1, "{status}");
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status"], "");
     let text = stdout(&out);
     assert!(text.contains("Unprotected files"), "{text}");
     assert!(text.contains("config/settings.yml"), "{text}");
@@ -1933,7 +1922,7 @@ fn agent_status_lists_files_whose_contents_hold_secrets() {
 #[test]
 fn agent_status_no_scan_reads_no_contents() {
     let dir = scan_repo();
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "status", "--json", "--no-scan"],
@@ -1946,7 +1935,7 @@ fn agent_status_no_scan_reads_no_contents() {
     // Name candidates are still suggested.
     assert!(!status["suggested"].as_array().unwrap().is_empty());
 
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "status", "--no-scan"],
@@ -1980,7 +1969,7 @@ fn protected_files_are_not_read() {
     assert_eq!(stdout(&out), "config/settings.yml\n");
     assert_eq!(stderr(&out), "");
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!stderr(&out).contains(".env"), "{}", stderr(&out));
 
@@ -1998,20 +1987,20 @@ fn a_disabled_detector_runs_only_when_named() {
     // A model that isn't there fails whenever the detector is built.
     let config = detector_config(
         dir.path(),
-        "  - privacy_filter:\n      enabled: false\n      model_dir: /nonexistent/velociredactor-model\n",
+        "  - privacy_filter:\n      enabled: false\n      model_dir: /nonexistent/veloci-model\n",
     );
     let mut source = fs::read_to_string(&config).unwrap();
     source.push_str("\nagent:\n  protected: [\".env\"]\n");
     fs::write(&config, source).unwrap();
 
-    let out = velociredactor_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
+    let out = veloci_in(dir.path(), dir.path(), &["agent", "status", "--json"], "");
     assert!(out.status.success(), "{}", stderr(&out));
     let status: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(status["secrets"][0]["path"], "config/settings.yml");
     assert_eq!(scan_in(dir.path(), &[]).status.code(), Some(1));
 
     let named = ["--detector", "privacy_filter"];
-    let out = velociredactor_in(
+    let out = veloci_in(
         dir.path(),
         dir.path(),
         &["agent", "status", named[0], named[1]],
