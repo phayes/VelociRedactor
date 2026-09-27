@@ -1,6 +1,6 @@
 [package]
 name = "veloci"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.88"
 description = "Veloci Redactor: redact secrets and PII from text and structured files, with stable numbered redactions"

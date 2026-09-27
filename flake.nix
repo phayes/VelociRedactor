@@ -19,7 +19,7 @@
         pkgs:
         pkgs.rustPlatform.buildRustPackage {
           pname = "veloci";
-          version = "0.3.1";
+          version = "0.3.2";
 
           src = lib.cleanSourceWith {
             src = ./.;
