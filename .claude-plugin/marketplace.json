@@ -11,7 +11,7 @@
       "name": "veloci",
       "source": {
         "source": "archive",
-        "url": "https://github.com/phayes/velociredactor/releases/latest/download/veloci-plugin.zip"
+        "url": "https://github.com/phayes/veloci/releases/latest/download/veloci-plugin.zip"
       },
       "description": "Read sensitive files through Veloci Redactor so secrets and personal data never reach the model."
     }
