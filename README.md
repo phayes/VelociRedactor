@@ -47,6 +47,29 @@ scoop install veloci
 
 The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
 
+## Find files with secrets
+
+`scan` lists the files that hold secrets, with how many values each would have redacted and which detectors found them. Values are hidden by default:
+
+```console
+$ veloci scan
+FILE                 FINDINGS  DETECTORS
+.env                 1         entropy                   protected
+config/settings.yml  2         entropy,credentialed_uri
+scanned 5 files: 2 with secrets, 0 skipped as binary or over --max-filesize
+```
+
+```console
+veloci scan -l config/          # paths only
+veloci scan --json              # with the line of each finding
+veloci scan --show-value        # include the secrets
+veloci scan --unprotected       # only files the agent section leaves readable
+```
+
+`--show-value` deliberately prints sensitive data and should be used with care. It adds a `VALUE` column to the table, showing up to three values per file cut to 60 characters each, and a `value` field with the full value to each `--json` finding.
+
+Each file is redacted in memory with the configuration found from its own directory, and allow lists apply. Unlike `grep`, hidden and `.gitignore`d files are scanned by default, since that is where secrets usually live; `--skip-hidden` and `--skip-ignored` leave them out. Git's own files and dependency and build directories (`node_modules`, `target`, `vendor`, `.venv`, `venv`, `__pycache__`, `dist`, `build`) are skipped unless `--all-dirs` is given, and so are binary files and files over `--max-filesize` (10M by default). Files that an `agent` section protects are marked `protected`. The exit status is 1 when any file holds secrets, 0 when none does, and 2 on an error with nothing found.
+
 ## Redact input
 
 Pass a file:
@@ -109,29 +132,6 @@ veloci grep -l --hidden AWS_
 Each file is searched as it is on disk first. A file with a match is redacted and searched again, and only that second search prints, so output never holds a secret and searching for a secret's own text finds nothing. Line numbers count lines of the redacted text, which can be fewer than the file's when a multi-line secret, such as a private key, becomes one token.
 
 Directories are searched recursively, skipping hidden files and files that `.gitignore` excludes. Each file is redacted with the configuration found from its own directory unless `--config` is given. The exit status is 0 when something matched, 1 when nothing did, and 2 on an error.
-
-## Find files with secrets
-
-`scan` lists the files that hold secrets, with how many values each would have redacted and which detectors found them. Values are hidden by default:
-
-```console
-$ veloci scan
-FILE                 FINDINGS  DETECTORS
-.env                 1         entropy                   protected
-config/settings.yml  2         entropy,credentialed_uri
-scanned 5 files: 2 with secrets, 0 skipped as binary or over --max-filesize
-```
-
-```console
-veloci scan -l config/          # paths only
-veloci scan --json              # with the line of each finding
-veloci scan --show-value        # include the secrets
-veloci scan --unprotected       # only files the agent section leaves readable
-```
-
-`--show-value` deliberately prints sensitive data and should be used with care. It adds a `VALUE` column to the table, showing up to three values per file cut to 60 characters each, and a `value` field with the full value to each `--json` finding.
-
-Each file is redacted in memory with the configuration found from its own directory, and allow lists apply. Unlike `grep`, hidden and `.gitignore`d files are scanned by default, since that is where secrets usually live; `--skip-hidden` and `--skip-ignored` leave them out. Git's own files and dependency and build directories (`node_modules`, `target`, `vendor`, `.venv`, `venv`, `__pycache__`, `dist`, `build`) are skipped unless `--all-dirs` is given, and so are binary files and files over `--max-filesize` (10M by default). Files that an `agent` section protects are marked `protected`. The exit status is 1 when any file holds secrets, 0 when none does, and 2 on an error with nothing found.
 
 ## Block commits that add secrets
 
