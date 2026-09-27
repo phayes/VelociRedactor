@@ -47,6 +47,13 @@ scoop install veloci
 
 The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
 
+# Claude Code
+
+```
+/plugin marketplace add phayes/velociredactor
+/plugin install veloci@veloci
+```
+
 ## Find files with secrets
 
 `scan` lists the files that hold secrets, with how many values each would have redacted and which detectors found them. Values are hidden by default:
