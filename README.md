@@ -18,10 +18,17 @@ This README is the command-line manual. For the Rust library, see the [`veloci` 
 The latest release for this platform:
 
 ```console
+# Any platform:
 curl -fsSL https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.sh | bash
+
+# Mac
+TODO
+# Linux (.deb)
+TODO
 ```
 
 ```powershell
+# Powershell
 irm https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.ps1 | iex
 ```
 
