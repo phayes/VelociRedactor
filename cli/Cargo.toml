@@ -1,6 +1,6 @@
 [package]
 name = "veloci-cli"
-version = "0.1.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Command-line interface for Veloci Redactor: redact secrets and PII from text and structured files"
@@ -18,7 +18,7 @@ cuda = ["veloci/privacy-filter-cuda"]
 openblas = ["veloci/privacy-filter-openblas"]
 
 [dependencies]
-veloci = { path = "..", version = "0.1.0", features = ["privacy-filter"] }
+veloci = { path = "..", version = "0.3.0", features = ["privacy-filter"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 grep = "0.4"
@@ -30,7 +30,7 @@ termcolor = "1"
 
 # Apple Accelerate is always there on macOS, so the binary uses it.
 [target.'cfg(target_os = "macos")'.dependencies]
-veloci = { path = "..", version = "0.1.0", features = ["privacy-filter-accelerate"] }
+veloci = { path = "..", version = "0.3.0", features = ["privacy-filter-accelerate"] }
 
 [[bin]]
 name = "veloci"
