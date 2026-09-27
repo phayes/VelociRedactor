@@ -208,10 +208,11 @@ jobs:
             cp "$extract/veloci" "plugin/libexec/veloci-${target}"
           done
 
+          # Unlike the tarballs, cargo-dist's Windows zip has no wrapping directory.
           extract="extracted-x86_64-pc-windows-msvc"
           mkdir -p "$extract"
           unzip -q "dl/veloci-cli-x86_64-pc-windows-msvc.zip" -d "$extract"
-          cp "$extract"/*/veloci.exe "plugin/libexec/veloci-x86_64-pc-windows-msvc.exe"
+          cp "$extract/veloci.exe" "plugin/libexec/veloci-x86_64-pc-windows-msvc.exe"
 
           cp winarm64/veloci.exe "plugin/libexec/veloci-aarch64-pc-windows-msvc.exe"
 
