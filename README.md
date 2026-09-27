@@ -50,8 +50,11 @@ The Unix script installs to `/usr/local/bin` when that directory is writable, ot
 # Claude Code
 
 ```
+claude
 /plugin marketplace add phayes/veloci
 /plugin install veloci@veloci
+
+Hi Caude, set up velcoi for this project
 ```
 
 ## Find files with secrets
