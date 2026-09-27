@@ -33,12 +33,12 @@ sudo apt install "./veloci_${VERSION}_$ARCH.deb"
 cargo install veloci-cli
 
 # Nix
-nix run github:phayes/velociredactor && nix profile install github:phayes/velociredactor
+nix run github:phayes/veloci && nix profile install github:phayes/veloci
 ```
 
 ```powershell
 # Windows: Powershell
-irm https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/phayes/veloci/master/scripts/install.ps1 | iex
 
 # Windows: Scoop
 scoop bucket add phayes https://github.com/phayes/scoop-bucket
@@ -50,7 +50,7 @@ The Unix script installs to `/usr/local/bin` when that directory is writable, ot
 # Claude Code
 
 ```
-/plugin marketplace add phayes/velociredactor
+/plugin marketplace add phayes/veloci
 /plugin install veloci@veloci
 ```
 
