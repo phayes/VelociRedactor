@@ -19,14 +19,14 @@ The latest release for this platform:
 
 ```console
 # Any platform:
-curl -fsSL https://raw.githubusercontent.com/phayes/velociredactor/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/phayes/veloci/master/scripts/install.sh | bash
 
 # Homebrew (macOS and Linux)
 brew install phayes/tap/veloci-cli
 
 # Debian and Ubuntu (.deb, amd64 or arm64)
 VERSION=0.3.1 ARCH=$(dpkg --print-architecture)
-curl -fsSLO "https://github.com/phayes/velociredactor/releases/download/v$VERSION/veloci_${VERSION}_$ARCH.deb"
+curl -fsSLO "https://github.com/phayes/veloci/releases/download/v$VERSION/veloci_${VERSION}_$ARCH.deb"
 sudo apt install "./veloci_${VERSION}_$ARCH.deb"
 
 # Cargo (rust)
