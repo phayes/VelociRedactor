@@ -45,14 +45,14 @@ scoop install veloci
 
 The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
 
-# Claude Code
+## Claude Code
 
 ```
 claude
 /plugin marketplace add phayes/veloci
 /plugin install veloci@veloci
 
-Hi Caude, set up velcoi for this project
+Hi Caude, set up veloci for this project
 ```
 
 ## Find files with secrets
