@@ -283,7 +283,9 @@ jobs:
         shell: cmd
         run: |
           set "PATH=%SystemRoot%\System32;%SystemRoot%"
-          where bash >nul 2>&1 && (echo bash is on PATH & exit /b 1)
+          rem System32 may hold bash.exe, the WSL launcher, which fails without
+          rem an installed distro; only a bash that actually runs is a problem.
+          bash -c "exit 0" <nul >nul 2>&1 && (echo a working bash is on PATH & exit /b 1)
           set "PATH=%GITHUB_WORKSPACE%\plugin\bin;%PATH%"
           call veloci --version || exit /b 1
           cd proj
