@@ -2,7 +2,7 @@
 
 # Veloci Redactor
 
-Veloci Redactor (`veloci`) redacts secrets and personal data from text and structured files while preserving their shape and formatting. Each distinct secret is replaced by a token such as `[REDACTED-1]`.
+Veloci Redactor (`veloci`) finds and redacts secrets and personal data from text and structured files. Each distinct secret is identified and replaced by a token such as `[REDACTED-1]`.
 
 Veloci Redactor aims:
  - ***Fast***, with parallel scanning and a very fast regex engine.
@@ -43,8 +43,6 @@ scoop bucket add phayes https://github.com/phayes/scoop-bucket
 scoop install veloci
 ```
 
-The Unix script installs to `/usr/local/bin` when that directory is writable, otherwise `~/.local/bin`. The Windows script installs to `%LOCALAPPDATA%\Programs\veloci` and can append that directory with `-AddToPath`. Override either with `--prefix` / `-Prefix` or `$PREFIX`. From cargo:
-
 ## Claude Code
 
 ```
@@ -53,6 +51,12 @@ claude
 /plugin install veloci@veloci
 
 Hi Caude, set up veloci for this project
+```
+
+## Configuring Veloci Redactor
+```
+veloci init
+cat veloci.yml # View the config and edit as needed
 ```
 
 ## Find files with secrets
@@ -70,13 +74,9 @@ scanned 5 files: 2 with secrets, 0 skipped as binary or over --max-filesize
 ```console
 veloci scan -l config/          # paths only
 veloci scan --json              # with the line of each finding
-veloci scan --show-value        # include the secrets
+veloci scan --show-value        # display the secrets, use with care
 veloci scan --unprotected       # only files the agent section leaves readable
 ```
-
-`--show-value` deliberately prints sensitive data and should be used with care. It adds a `VALUE` column to the table, showing up to three values per file cut to 60 characters each, and a `value` field with the full value to each `--json` finding.
-
-Each file is redacted in memory with the configuration found from its own directory, and allow lists apply. Unlike `grep`, hidden and `.gitignore`d files are scanned by default, since that is where secrets usually live; `--skip-hidden` and `--skip-ignored` leave them out. Git's own files and dependency and build directories (`node_modules`, `target`, `vendor`, `.venv`, `venv`, `__pycache__`, `dist`, `build`) are skipped unless `--all-dirs` is given, and so are binary files and files over `--max-filesize` (10M by default). Files that an `agent` section protects are marked `protected`. The exit status is 1 when any file holds secrets, 0 when none does, and 2 on an error with nothing found.
 
 ## Redact input
 
@@ -99,15 +99,13 @@ veloci redact secrets.json --output safe.json
 veloci redact secrets.json --in-place
 ```
 
-The format is selected from the file name and then the content. Use `--format NAME` to select one explicitly, or `--raw` to treat the entire input as plain text:
+Veloci Redactor is content (`json`, `yaml` etc) aware and by default will scan only values (not comments).
 
 ```console
-veloci redact document --format json
-veloci redact document.txt --raw
-veloci formats
+veloci redact document --format json # Force json formatter
+veloci redact document.txt --raw     # Treat it as raw text, not a structured file
+veloci redact foo.yml --comments     # Also scan comments            
 ```
-
-Structured formats are parsed so that values can be changed while preserving keys and formatting. Configuration can enable comment scanning.
 
 ## Inspect findings
 
@@ -117,6 +115,7 @@ Structured formats are parsed so that values can be changed while preserving key
 veloci list secrets.json
 veloci list secrets.json --json
 veloci list secrets.json --show-value
+veloci list secrets.json --comments --show-value
 ```
 
 Values are hidden by default. `--show-value` deliberately prints sensitive data and should be used with care.
@@ -129,7 +128,7 @@ veloci redact --check secrets.json >/dev/null
 
 ## Search files
 
-`grep` searches like ripgrep, but prints matches from each file's redacted text:
+`grep` searches like ripgrep, but redacts before any results are printed:
 
 ```console
 veloci grep password
@@ -137,13 +136,11 @@ veloci grep -C2 -t yaml api_key config/
 veloci grep -l --hidden AWS_
 ```
 
-Each file is searched as it is on disk first. A file with a match is redacted and searched again, and only that second search prints, so output never holds a secret and searching for a secret's own text finds nothing. Line numbers count lines of the redacted text, which can be fewer than the file's when a multi-line secret, such as a private key, becomes one token.
-
 Directories are searched recursively, skipping hidden files and files that `.gitignore` excludes. Each file is redacted with the configuration found from its own directory unless `--config` is given. The exit status is 0 when something matched, 1 when nothing did, and 2 on an error.
 
 ## Block commits that add secrets
 
-`githook` is a Git pre-commit hook. It reads the staged diff for the lines the commit adds, then redacts each staged file whole, as it is in the index, so structured formats and allow lists see the full file. Secrets on added lines are listed by file, line and detector, never by value, and the commit is refused:
+`veloci githook` is a Git pre-commit hook to block secrets from accidentally being committed. 
 
 ```console
 $ git commit -m "Add client"
@@ -173,7 +170,7 @@ repos:
         pass_filenames: false
 ```
 
-Secrets already committed on lines the commit leaves alone are not reported; `veloci scan` finds those. A renamed file counts as added whole. Binary files, files over 10M, submodules and symbolic links are skipped. The exit status is 1 when the commit adds secrets, 0 when it does not, and 2 on an error.
+Binary files, files over 10M, submodules and symbolic links are skipped. The exit status is 1 when the commit adds secrets, 0 when it does not, and 2 on an error.
 
 ## Configuration
 
