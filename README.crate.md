@@ -2,7 +2,7 @@
 
 # veloci
 
-Veloci Redactor (`veloci`) is a Rust library for redacting secrets and personal data from text and structured files. It was previously published as `velociredactor`.
+Veloci Redactor (`veloci`) is a Rust library for redacting secrets and personal data from text and structured files. 
 
 Each redacted value becomes a token named `[REDACTED-N]`. `N` numbers distinct secrets in order of first appearance, and equal values share a number. The token format is configurable: `{n}` is that number and `{reason}` is the detector that found the secret. Exact values and regular expressions can allow confirmed false positives.
 

@@ -26,7 +26,7 @@ use termcolor::NoColor;
 use veloci::FormatHint;
 
 use crate::util::{
-    CONFIG_ENV, ConfigArg, DetectorArg, Fatal, RulesCache, WalkOptions, display_path,
+    CONFIG_ENV, ConfigArg, EnableArg, Fatal, RulesCache, WalkOptions, display_path,
     for_each_ordered, is_broken_pipe, is_file, walk_builder,
 };
 
@@ -180,7 +180,7 @@ pub struct GrepArgs {
     config: Option<PathBuf>,
 
     #[command(flatten)]
-    enable: DetectorArg,
+    enable: EnableArg,
 }
 
 /// How results are printed. Each file prints into a buffer of its own, so

@@ -6,7 +6,7 @@ This is a condensed guide to every section. The authoritative, fully commented v
 
 | Key | Required | Purpose |
 |---|---|---|
-| `comments` | no (default `false`) | Also scan comments, in formats that have them. |
+| `comments` | no (default `false`) | Also scan comments, in formats that have them. `--comments` does the same for one run. |
 | `replacement` | no (default `[REDACTED-{n}]`) | Token written in place of each secret. `{n}` is the 1-based redaction number; `{reason}` is the detector label. |
 | `formats` | yes | Formats to recognize, in the order they're tried when guessing from content. |
 | `policy` | yes | Which values get scanned at all. |

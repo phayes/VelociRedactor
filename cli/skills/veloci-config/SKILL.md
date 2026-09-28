@@ -44,7 +44,7 @@ veloci config show > veloci.yml
 | Extra gitleaks/betterleaks rules | `ruleset.rules` | add `./my-rules.toml` (relative to the config) |
 | Emails, phone numbers, addresses | uncomment `pii:email`, `pii:phone`, `pii:address` | |
 | Names and other contextual PII | the `privacy_filter` detector | see below |
-| Secrets in comments | `comments: true` | |
+| Secrets in comments | `comments: true` | or `--comments` on any command, for one run |
 | The token written in place of a secret | `replacement` | `"[REDACTED-{n}]"` or `"[REDACTED-{n}:{reason}]"` |
 | Which files agents read redacted | `agent.protected`, `agent.exclude`, `agent.enforce` | `protected: [".env*", "secrets/"]` |
 

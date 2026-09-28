@@ -191,7 +191,7 @@ veloci config validate
 The configuration controls:
 
 - the formats that can be recognized;
-- which keys, objects, and comments are scanned;
+- which keys, objects, and comments are scanned (`--comments` turns comments on for one run);
 - documentation placeholders excluded from credential detection;
 - the detectors and their settings;
 - exact values, regular expressions, surrounding patterns, and key paths that are allowed.
@@ -243,6 +243,7 @@ With `enforce`, the plugin's hook blocks the agent's own Read and Grep tools on 
 veloci redact [OPTIONS] [FILE]
     -c, --config FILE   Configuration file
         --detector NAME  Also run this disabled detector (repeatable)
+        --comments       Also scan comments
     -f, --format NAME  Select the input format
         --raw          Treat input as plain text
     -o, --output FILE  Write to a file
@@ -252,6 +253,7 @@ veloci redact [OPTIONS] [FILE]
 veloci list [OPTIONS] [FILE]
     -c, --config FILE   Configuration file
         --detector NAME  Also run this disabled detector (repeatable)
+        --comments       Also scan comments
     -f, --format NAME  Select the input format
         --raw          Treat input as plain text
         --json         Emit JSON
@@ -261,6 +263,7 @@ veloci list [OPTIONS] [FILE]
 veloci grep [OPTIONS] PATTERN [PATH...]
         --config FILE    Configuration file (default: found per file)
         --detector NAME  Also run this disabled detector (repeatable)
+        --comments       Also scan comments
     -e, --regexp PAT     Pattern; repeat for several (paths follow)
     -F, --fixed-strings  Literal patterns
     -i, --ignore-case    Case-insensitive
@@ -289,6 +292,7 @@ veloci grep [OPTIONS] PATTERN [PATH...]
 veloci scan [OPTIONS] [PATH...]
         --config FILE      Configuration file (default: found per file)
         --detector NAME    Also run this disabled detector (repeatable)
+        --comments         Also scan comments
         --unprotected      Only files no agent section protects (not read)
     -l, --files-with-matches  Print only paths
         --json             Emit JSON
@@ -302,14 +306,15 @@ veloci scan [OPTIONS] [PATH...]
         --max-filesize SIZE  Skip larger files (default 10M)
 
 veloci init [--yes]            Create veloci.yml at the project root
-veloci githook [--config FILE] [--detector NAME]
+veloci githook [--config FILE] [--detector NAME] [--comments]
 veloci formats
 veloci config show [--config FILE]
 veloci config location [--config FILE]
 veloci config validate [--config FILE]
 veloci privacy_filter download [--dir DIR] [--repo OWNER/NAME]
                                          [--revision REV]
-veloci agent status [--json] [--no-scan] [--detector NAME] [--config FILE]
+veloci agent status [--json] [--no-scan] [--detector NAME] [--comments]
+                    [--config FILE]
 veloci agent check FILE... [--config FILE]
 veloci agent init --protect GLOB... [--exclude GLOB...] [--enforce]
 veloci agent skill [NAME]      Print an agent skill, or list them

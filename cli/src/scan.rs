@@ -18,7 +18,7 @@ use serde_json::json;
 use veloci::FormatHint;
 
 use crate::util::{
-    CONFIG_ENV, ConfigArg, DetectorArg, Fatal, RulesCache, SKIPPED_DIRS, WalkOptions,
+    CONFIG_ENV, ConfigArg, EnableArg, Fatal, RulesCache, SKIPPED_DIRS, WalkOptions,
     for_each_ordered, is_broken_pipe, is_file, walk_builder,
 };
 
@@ -84,7 +84,7 @@ pub struct ScanArgs {
     config: Option<PathBuf>,
 
     #[command(flatten)]
-    enable: DetectorArg,
+    enable: EnableArg,
 }
 
 /// What to scan, beyond the paths.

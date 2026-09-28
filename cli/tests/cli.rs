@@ -485,7 +485,6 @@ fn rule_options_are_not_command_line_flags() {
         "--disallow-path",
         "--exclude-detector",
         "--pii",
-        "--comments",
         "--entropy-threshold",
         "--rules-pack",
         "--ruleset",
@@ -512,6 +511,13 @@ fn comments_are_scanned_only_when_asked() {
     let out = redact(&["-f", "toml", "--config", &config], &input);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "# token [REDACTED-1]\nkey = \"ok\"\n");
+
+    // `--comments` does the same for one run.
+    let out = redact(&["-f", "toml", "--comments"], &input);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "# token [REDACTED-1]\nkey = \"ok\"\n");
+    let out = list(&["-f", "toml", "--comments", "--check"], &input);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
 }
 
 #[test]
@@ -2014,6 +2020,22 @@ fn a_disabled_detector_runs_only_when_named() {
     let out = scan_in(dir.path(), &["--detector", "privacy_filtr"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("privacy_filtr"), "{}", stderr(&out));
+}
+
+#[test]
+fn scan_and_grep_take_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join("c.yml"), format!("a: ok\n# token {S}\n")).unwrap();
+
+    assert_eq!(scan_in(dir.path(), &[]).status.code(), Some(0));
+    let out = scan_in(dir.path(), &["--comments"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stdout(&out).contains("c.yml"), "{}", stdout(&out));
+
+    let out = grep_in(dir.path(), &["--comments", "token"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "c.yml:2:# token [REDACTED-1]\n");
 }
 
 /// Run git in `dir`, isolated from the user's and system configuration.

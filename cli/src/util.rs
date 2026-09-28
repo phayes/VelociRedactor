@@ -54,23 +54,30 @@ pub struct ConfigArg {
     pub config: Option<PathBuf>,
 
     #[command(flatten)]
-    pub enable: DetectorArg,
+    pub enable: EnableArg,
 }
 
-/// Detectors the configuration disables, turned on for this run.
+/// What the configuration leaves off, turned on for this run.
 #[derive(Debug, Clone, Default, Args)]
-pub struct DetectorArg {
+pub struct EnableArg {
     /// Run a detector the configuration lists with `enabled: false`, named by
     /// its label or by detector (`privacy_filter`). Repeatable.
     #[arg(long = "detector", value_name = "NAME")]
     pub detectors: Vec<String>,
+
+    /// Scan comments as well as values, in formats that have them, as the
+    /// configuration's `comments: true` does.
+    #[arg(long)]
+    pub comments: bool,
 }
 
-impl DetectorArg {
-    /// Turn on the detectors named in `config`. A name that is neither a
-    /// label nor a detector in it is an error; a detector it does not list
-    /// is a warning, since each file may find a different configuration.
+impl EnableArg {
+    /// Turn on comment scanning if asked, and the detectors named in
+    /// `config`. A name that is neither a label nor a detector in it is an
+    /// error; a detector it does not list is a warning, since each file may
+    /// find a different configuration.
     pub fn apply(&self, config: &mut Config) -> Result<()> {
+        config.comments |= self.comments;
         for name in config.enable_detectors(&self.detectors) {
             if DETECTOR_NAMES.contains(&name) {
                 eprintln!(
@@ -130,7 +137,7 @@ impl ConfigArg {
 
     /// The rules to apply, in order: `--config`, `$VELOCI_CONFIG`,
     /// a discovered file, or the built-in configuration; with the detectors
-    /// `--detector` names turned on.
+    /// `--detector` names, and comments if `--comments` is given, turned on.
     pub fn load(&self) -> Result<Config> {
         let mut config = match self.resolved_path()? {
             Some(path) => Config::from_path(path)?,
@@ -324,8 +331,8 @@ pub fn allowed_file_paths(config: &Config, path: Option<&Path>) -> Result<FileKe
 }
 
 /// The rules of the configuration at `path`, or of the built-in
-/// configuration, with the detectors `enable` names turned on.
-fn load_rules(path: Option<&Path>, enable: &DetectorArg) -> Result<Rules> {
+/// configuration, with what `enable` names turned on.
+fn load_rules(path: Option<&Path>, enable: &EnableArg) -> Result<Rules> {
     let load = || -> Result<Rules> {
         let mut config = match path {
             Some(path) => Config::from_path(path)?,
