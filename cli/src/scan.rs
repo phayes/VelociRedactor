@@ -517,7 +517,7 @@ fn write_table(out: &mut impl Write, header: &[String], rows: &[Vec<String>]) ->
 }
 
 /// A size in bytes, with an optional `K`, `M` or `G` suffix (powers of 1024).
-fn parse_size(text: &str) -> Result<u64, String> {
+pub(crate) fn parse_size(text: &str) -> Result<u64, String> {
     let text = text.trim();
     let (number, shift) = match text.chars().last().map(|c| c.to_ascii_uppercase()) {
         Some('K') => (&text[..text.len() - 1], 10),

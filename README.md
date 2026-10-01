@@ -222,6 +222,31 @@ The printed entry has `enabled: false`, so it runs only when asked for, with `--
 
 Use `--dir DIR` for another location, `--repo OWNER/NAME` for another model repository, or `--revision REV` for a particular revision. The CLI crate's `cuda` feature enables NVIDIA GPU execution, and `openblas` enables system OpenBLAS acceleration on Linux. (TODO: TURN ALL THIS THIS ON BY DEFAULT FOR COMPATIBLE PLATFORMS)
 
+## Mount a redacted view
+
+`veloci mount` (Linux) mounts a view of a directory in which every file reads redacted. Any tool working in the mount, including an AI agent's own `cat`, `grep` or editor, never sees a secret:
+
+```console
+$ veloci mount /tmp/redacted        # mirrors the Git repository, or the current directory
+$ cat /tmp/redacted/.env
+DB_PASSWORD=[REDACTED-1]
+```
+
+Choose another directory with `--source DIR`. The mountpoint must be an empty directory. It may be inside the source directory, such as `veloci mount .redacted`; the view then leaves the mountpoint out, and it is added to `.git/info/exclude` while mounted. Unmount with Ctrl-C or `fusermount3 -u MOUNTPOINT`. The `fuse3` package provides `fusermount3`.
+
+Each file is redacted with the configuration found from its own directory, and `--config`, `--detector`, `--comments`, `--format` and `--raw` work as they do for `redact`. Files with nothing to redact, files `allow.files` names, and binary files read as they are and can be written as usual. A file holding redacted secrets can't be written, truncated or replaced, because that would overwrite the secrets with tokens. Deleting it is allowed. Moving or linking it is refused when its secrets would not be redacted at the new path, such as into a directory `allow.files` names.
+
+A refused write fails with "Permission denied", or with the error `--deny-errno` chooses (`EPERM`, `EKEYREJECTED` or `ENOKEY`). Such files show no write permission, so editors open them read-only, and each refusal is logged to standard error (or `--log FILE`). The `user.veloci.status` extended attribute says how any file is treated:
+
+```console
+$ getfattr --only-values -n user.veloci.status /tmp/redacted/.env
+redacted: 1 finding (credential_key); writes denied
+```
+
+`veloci.yml`, `VELOCI.yml` and the `--config` file are read-only through the mount unless `--allow-veloci-yml` is given, and `.git` can't be created, moved or deleted. Both decide what is redacted. The configuration is read when mounting and again on `kill -HUP`, never in between. `--read-only` refuses all writes, `--deny-tokens` refuses writes that contain a redaction token, and `--status-dir NAME` serves recent refusals in `NAME/denials` at the root of the mount.
+
+The mount protects secrets only from processes that can't reach the source directory itself. Run the agent in a container, sandbox or as another user that sees only the mountpoint (use `--allow-other` for another user). Otherwise the mount guards against accidental reads, as the `enforce` hook does.
+
 ## AI agents
 
 Coding agents send whatever they read to their model. Veloci Redactor ships [agent skills](plugin/skills) and a Claude Code plugin that make agents read and search sensitive files through `redact` and `grep`, so secrets never reach the model.
@@ -310,6 +335,24 @@ veloci scan [OPTIONS] [PATH...]
     -L, --follow           Follow symbolic links
     -d, --max-depth NUM    Limit directory depth
         --max-filesize SIZE  Skip larger files (default 10M)
+
+veloci mount [OPTIONS] MOUNTPOINT
+        --source DIR       Directory to mirror (default: Git root, else current dir)
+    -c, --config FILE      Configuration file (default: found per file)
+        --detector NAME    Also run this disabled detector (repeatable)
+        --comments         Also scan comments
+    -f, --format NAME      Treat every file as this format
+        --raw              Treat every file as plain text
+        --deny-errno NAME  Error for refused writes: EACCES (default), EPERM,
+                           EKEYREJECTED, ENOKEY
+        --deny-tokens      Refuse writes containing a redaction token
+        --allow-veloci-yml Allow changing configuration files through the mount
+        --read-only        Refuse all writes
+        --allow-other      Let other users use the mount
+        --status-dir NAME  Serve recent refusals in NAME/denials
+        --log FILE         Write refusals here instead of standard error
+        --no-git-exclude   Don't add the mountpoint to .git/info/exclude
+        --cache-size SIZE  Memory for redacted contents (default 256M)
 
 veloci init [--yes]            Create veloci.yml at the project root
 veloci githook [--config FILE] [--detector NAME]

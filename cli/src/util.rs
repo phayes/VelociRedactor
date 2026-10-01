@@ -454,6 +454,7 @@ pub fn walk_builder(root: &Path, options: &WalkOptions<'_>) -> Result<WalkBuilde
             .with_context(|| format!("parsing the glob {glob:?}"))?;
     }
     let skipped_dirs = options.skipped_dirs;
+    let mounts = crate::mount::veloci_mounts();
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(!options.hidden)
@@ -468,9 +469,15 @@ pub fn walk_builder(root: &Path, options: &WalkOptions<'_>) -> Result<WalkBuilde
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            // A `veloci mount` mount holds redacted copies of files the walk
+            // reaches anyway.
+            let mounted = is_dir
+                && !mounts.is_empty()
+                && std::path::absolute(entry.path()).is_ok_and(|p| mounts.contains(&p));
             let skipped = entry.file_name() == ".git"
-                || (entry.file_type().is_some_and(|t| t.is_dir())
-                    && skipped_dirs.contains(&name.as_ref()));
+                || (is_dir && skipped_dirs.contains(&name.as_ref()))
+                || mounted;
             entry.depth() == 0 || !skipped
         });
     Ok(builder)

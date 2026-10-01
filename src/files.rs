@@ -49,6 +49,11 @@ impl FileKeyPaths {
         Ok(Self { entries })
     }
 
+    /// Whether there are no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// The key paths never scanned in the file at `path`.
     pub fn for_file(&self, path: &Path) -> Vec<&str> {
         self.entries
