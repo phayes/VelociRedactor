@@ -183,8 +183,12 @@ cli/src/fuse/
   and `RulesCache` gains an `invalidate(path)`.
 - **`inodes.rs`.** Starts path-based, with an `RwLock<HashMap<u64, PathBuf>>` plus a
   reverse map. The FUSE ino is our own counter, with ino 1 = SOURCE, and `st_ino` from
-  disk is passed through in attrs. `rename` re-keys the subtree. This is simpler than
-  `O_PATH` fds, and good enough to start with.
+  disk is passed through in attrs. `rename` re-keys the subtree. Paths are
+  stored relative to SOURCE. Every underlying operation goes through a directory
+  fd for SOURCE that is opened **before** mounting (`openat`, `fstatat`, `renameat`,
+  `unlinkat` and so on, via `rustix`), and never through an absolute path. This is
+  what makes it safe to mount inside SOURCE, or over it (§3.1). It also means the mount
+  keeps following the same directory if SOURCE is renamed while mounted.
 - **Concurrency.** fuser 0.18's `Filesystem` takes `&self`, and on Linux
   `Config { n_threads, clone_fd }` gives it several worker threads. We use
   `n_threads = available_parallelism()`, and the redaction work runs on that
@@ -205,12 +209,56 @@ cli/src/fuse/
   kernel the real fd, giving native-speed reads. This is **never** used for `clean`
   files, because a secret written later would then bypass us.
 
+### 3.1 Mounting inside SOURCE
+
+`veloci fuse .redacted`, run in a repository, mounts the redacted view at
+`REPO/.redacted`. That directory is inside SOURCE, so the mount would contain itself.
+Without care, there are two problems:
+
+- **Self-recursion and deadlock.** If our filesystem touched `SOURCE/.redacted`,
+  the kernel would send the request back to us, because the path is now our own
+  mount. A worker thread would then wait on itself.
+- **Infinite trees.** `find` or `rg` inside the mount would see `.redacted/.redacted/...`.
+
+The fix is to **hide the mountpoint from the view.** At startup we record its path
+relative to SOURCE, plus its `(dev, ino)` from before mounting:
+
+- `lookup` of that name in its parent returns `ENOENT`, and `readdir(plus)` skips it.
+  We therefore never `openat` into it, and recursion cannot happen. Because
+  MOUNTPOINT must be empty, hiding it loses nothing.
+- `create`, `mkdir`, `symlink`, `link` and `rename` *to* that name return `EEXIST`.
+  `rename` of an ancestor directory of it is refused with `EBUSY`. This is what
+  the kernel already does for a mountpoint, so it is no surprise.
+- The `.veloci` status directory (`--status-dir`) is hidden and reserved in the
+  same way.
+
+Tools that walk the **real** tree descend into the mount and see redacted
+duplicates. That is safe, but slow and noisy:
+
+- **Git.** `veloci fuse` adds the mountpoint to `.git/info/exclude`, and removes
+  it again on unmount, so `git status` stays clean. `--no-git-exclude` turns this off.
+- **veloci `scan`/`grep`/`agent status`.** These skip directories whose filesystem
+  type is `fuse.veloci` (we set the subtype). We check this once per directory with
+  `statfs` and add it to the existing `SKIPPED_DIRS` check. Without this, scanning
+  the repository would also scan the redacted copy.
+- **Other tools** (IDE indexers, ripgrep): the README tells users to pick a
+  name that the project's ignore files already cover, or to add it to them.
+
+**Mounting over SOURCE (`--over`, follow-up).** Because all underlying access goes
+through the directory fd opened before mounting, MOUNTPOINT can be SOURCE itself.
+We add `MountOption::CUSTOM("nonempty")` when needed. After that, every process
+that resolves the repository path, `cd`s into it, or starts there sees only
+the redacted view, while veloci still reaches the real files through its fd. Two
+caveats go in the help text. A process whose current directory was already inside
+SOURCE keeps seeing the real files until it changes directory. And the user has to
+unmount to edit secrets.
+
 ### Validation in `run()`
 
 - SOURCE (from `--source`, else the Git root, else the current directory) must be a
   directory. MOUNTPOINT must be an empty directory.
-- The mount is refused when MOUNTPOINT is inside SOURCE, because that recurses, or
-  when SOURCE is inside MOUNTPOINT.
+- MOUNTPOINT may be inside SOURCE (see §3.1), or SOURCE itself (`--over`).
+  Any other case where SOURCE is inside MOUNTPOINT is refused.
 - The configuration is loaded once up front, so that a bad config fails before mounting
   (as `config validate` does).
 
@@ -219,6 +267,8 @@ cli/src/fuse/
 ```text
 veloci fuse [OPTIONS] MOUNTPOINT
         --source DIR       Directory to mirror (default: Git root, else current dir)
+        --over             Mount over SOURCE itself (MOUNTPOINT may be omitted)
+        --no-git-exclude   Don't add a mountpoint inside the repo to .git/info/exclude
     -c, --config FILE      Configuration file (default: found per file)
         --detector NAME    Also run this disabled detector (repeatable)
         --comments         Also scan comments
@@ -242,7 +292,9 @@ help and manual the same on every platform.
 
 ## 5. Threat model (for the README)
 
-The mount is only a boundary when the reader cannot reach SOURCE directly. Put
+The mount is only a boundary when the reader cannot reach SOURCE directly. A
+mount inside SOURCE (§3.1) is convenient, but `cat ../.env` from inside it reaches
+the raw file. It is a guard-rail, unless the sandbox exposes only the mountpoint. Put
 the agent in a container, user namespace, bubblewrap sandbox or separate user
 that sees only MOUNTPOINT. Use `--allow-other` when the reader is another
 user. Without that, the mount is a guard-rail of the same strength as the
@@ -279,6 +331,9 @@ that knows the real path.
    - Writing or creating `veloci.yml` fails.
    - `getfattr -n user.veloci.status` gives the expected text.
    - An absolute symlink into SOURCE resolves inside the mount.
+   - Mount at `SOURCE/.redacted`: the mount does not list itself, `find` inside it
+     terminates, `git status` in SOURCE is clean, and `veloci scan SOURCE` skips it.
+   - `--over`: after mounting, `cat SOURCE/.env` shows tokens.
    - An external edit to SOURCE shows up within the TTL.
 8. **CI.** Add `sudo apt-get install -y fuse3` to the Linux job in
    `.github/workflows/rust.yml`. GitHub's Ubuntu runners expose `/dev/fuse`.
