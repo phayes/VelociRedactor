@@ -28,7 +28,7 @@ use fuser::{
 use rustix::fs::{self as rfs, AtFlags, Mode, OFlags, Stat, Timespec, Timestamps, XattrFlags};
 
 use super::inodes::{DENIALS, Inodes, ROOT, STATUS_DIR};
-use super::policy::{self, Reason, is_config_name, is_config_path};
+use super::policy::{self, Reason, is_config_name, is_config_path, is_git};
 use super::status::{self, DenialLog, STATUS_XATTR};
 use super::view::{Class, Classifier, Key, View, ViewCache};
 use crate::util::Rules;
@@ -61,9 +61,15 @@ pub struct State {
     pub deny_tokens: bool,
     /// Whether configuration files may be changed through the mount.
     pub allow_config: bool,
+    /// Directory listings of case-insensitive directories, for
+    /// [`State::on_disk_name`].
+    names: Mutex<HashMap<PathBuf, (Key, FoldedNames)>>,
     handles: Mutex<HashMap<u64, Arc<Handle>>>,
     next_handle: AtomicU64,
 }
+
+/// A directory's entry names by their lowercase form.
+type FoldedNames = HashMap<String, Vec<OsString>>;
 
 /// An open file or directory.
 enum Handle {
@@ -146,6 +152,7 @@ impl State {
             deny,
             deny_tokens,
             allow_config,
+            names: Mutex::new(HashMap::new()),
             handles: Mutex::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
         }
@@ -182,7 +189,96 @@ impl State {
         if parent.0 == STATUS_DIR || parent.0 == DENIALS {
             return Err(Errno::EPERM);
         }
-        Ok(self.path(parent)?.join(name))
+        let dir = self.path(parent)?;
+        let name = self.on_disk_name(&dir, name);
+        Ok(dir.join(name))
+    }
+
+    /// The name the entry `name` in the directory `dir` has on disk, when it
+    /// exists.
+    ///
+    /// On a case-insensitive filesystem the kernel may ask for `DOCS/env`
+    /// when the directory is `docs`. Everything that judges a path, such as
+    /// `allow.files`, must see the name on disk, or a file could be moved
+    /// under a spelling that dodges a rule and then read under the real one.
+    fn on_disk_name(&self, dir: &Path, name: &OsStr) -> OsString {
+        let Some(text) = name.to_str() else {
+            return name.to_owned();
+        };
+        // Fast path: no other spelling of the name exists, so it is exact.
+        let upper = text.to_uppercase();
+        let flipped = if upper != text {
+            upper
+        } else {
+            text.to_lowercase()
+        };
+        if flipped == text || self.stat(&dir.join(&flipped)).is_err() {
+            return name.to_owned();
+        }
+        let Ok(dir_stat) = self.stat(dir) else {
+            return name.to_owned();
+        };
+        let key = Key::of(&dir_stat);
+        let mut names = self.names.lock().unwrap_or_else(|e| e.into_inner());
+        if !names.get(dir).is_some_and(|(k, _)| *k == key) {
+            let Ok(listing) = self.raw_list(dir) else {
+                return name.to_owned();
+            };
+            let mut folded = FoldedNames::new();
+            for entry in listing {
+                let fold = entry.to_string_lossy().to_lowercase();
+                folded.entry(fold).or_default().push(entry);
+            }
+            if names.len() >= 4096 {
+                names.clear();
+            }
+            names.insert(dir.to_owned(), (key, folded));
+        }
+        let (_, folded) = &names[dir];
+        let candidates = folded
+            .get(&text.to_lowercase())
+            .map_or(&[][..], Vec::as_slice);
+        if candidates.iter().any(|c| c == name) {
+            return name.to_owned();
+        }
+        match candidates {
+            [] => name.to_owned(),
+            [only] => only.clone(),
+            // Several entries differing only in case: the one that is the
+            // same file.
+            several => {
+                let target = self.stat(&dir.join(name)).ok();
+                several
+                    .iter()
+                    .find(|c| {
+                        target.as_ref().is_some_and(|t| {
+                            self.stat(&dir.join(c))
+                                .is_ok_and(|other| same_file(&other, t))
+                        })
+                    })
+                    .unwrap_or(&several[0])
+                    .clone()
+            }
+        }
+    }
+
+    /// The names in the directory `dir`, as they are on disk.
+    fn raw_list(&self, dir: &Path) -> Result<Vec<OsString>, Errno> {
+        let fd = rfs::openat(
+            &self.root,
+            at(dir),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(errno)?;
+        let mut names = Vec::new();
+        for entry in rfs::Dir::read_from(&fd).map_err(errno)? {
+            let name = OsStr::from_bytes(entry.map_err(errno)?.file_name().to_bytes()).to_owned();
+            if name != "." && name != ".." {
+                names.push(name);
+            }
+        }
+        Ok(names)
     }
 
     /// Whether `path` is the mountpoint or the status directory, which the
@@ -283,7 +379,7 @@ impl State {
     /// Whether changing what is at `path` changes which configuration
     /// applies, or what it says.
     fn changes_config(&self, path: &Path) -> Result<(), Refusal> {
-        if path.file_name().is_some_and(|name| name == ".git") {
+        if path.file_name().is_some_and(is_git) {
             return Err(Reason::Git.into());
         }
         if self.is_config(path) {
@@ -587,6 +683,11 @@ fn read_range(file: &File, offset: u64, size: u32) -> io::Result<Vec<u8>> {
     }
     data.truncate(filled);
     Ok(data)
+}
+
+#[allow(clippy::unnecessary_cast)]
+fn same_file(a: &Stat, b: &Stat) -> bool {
+    a.st_dev as u64 == b.st_dev as u64 && a.st_ino as u64 == b.st_ino as u64
 }
 
 fn is_regular(stat: &Stat) -> bool {
@@ -1015,6 +1116,10 @@ impl Filesystem for VelociFs {
             (Ok(from), Ok(to)) => (from, to),
             (Err(err), _) | (_, Err(err)) => return reply.error(err),
         };
+        // On a case-insensitive filesystem `to` may be an entry under another
+        // spelling, while the name the file ends up with is the one asked for.
+        // Both must pass.
+        let asked = to.with_file_name(newname);
         let exchange = flags.contains(RenameFlags::RENAME_EXCHANGE);
         let check = || -> Result<(), Refusal> {
             if s.reserved(&from) {
@@ -1026,30 +1131,45 @@ impl Filesystem for VelociFs {
                 s.may_move(&to, &from)?;
             } else {
                 s.may_create(&to)?;
-                // Replacing a file overwrites it.
-                s.may_write(&to)?;
+                s.may_create(&asked)?;
+                // Replacing another file overwrites it; renaming a file to
+                // another spelling of its own name does not.
+                let itself = match (s.stat(&from), s.stat(&to)) {
+                    (Ok(a), Ok(b)) => same_file(&a, &b),
+                    _ => false,
+                };
+                if !itself {
+                    s.may_write(&to)?;
+                }
             }
-            s.may_move(&from, &to)
+            s.may_move(&from, &to)?;
+            if asked != to {
+                s.may_move(&from, &asked)?;
+            }
+            Ok(())
         };
         if let Err(refusal) = check() {
             let op = format!("moving {} to", from.display());
-            return reply.error(s.refuse(req, &op, &to, refusal));
+            return reply.error(s.refuse(req, &op, &asked, refusal));
         }
         match rfs::renameat_with(
             &s.root,
             at(&from),
             &s.root,
-            at(&to),
+            at(&asked),
             rfs::RenameFlags::from_bits_retain(flags.bits()),
         ) {
             Ok(()) => {
+                // The name it has now, which the filesystem decides.
+                let moved = s.child(newparent, newname).unwrap_or(asked);
                 if exchange {
-                    s.inodes.exchange(&from, &to);
+                    s.inodes.exchange(&from, &moved);
                 } else {
-                    s.inodes.rename(&from, &to);
+                    s.inodes.rename(&from, &moved);
                 }
                 s.changed(&from);
                 s.changed(&to);
+                s.changed(&moved);
                 reply.ok();
             }
             Err(err) => reply.error(errno(err)),

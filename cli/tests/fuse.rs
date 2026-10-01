@@ -25,10 +25,7 @@ fn config() -> String {
 }
 
 fn fuse_available() -> bool {
-    let fusermount = std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|dir| dir.join("fusermount3").is_file())
-    });
-    let available = Path::new("/dev/fuse").exists() && fusermount;
+    let available = Path::new("/dev/fuse").exists() && on_path("fusermount3");
     if !available {
         eprintln!("skipped: FUSE is not available (needs /dev/fuse and fusermount3)");
     }
@@ -41,6 +38,8 @@ struct Mount {
     mountpoint: PathBuf,
     child: Option<Child>,
     log: PathBuf,
+    /// A case-insensitive `ciopfs` mount the source directory is on.
+    ciopfs: Option<PathBuf>,
 }
 
 impl Mount {
@@ -52,11 +51,35 @@ impl Mount {
     /// Mount with the mountpoint at `mountpoint`, relative to the new
     /// directory.
     fn at(mountpoint: &str, args: &[&str]) -> Option<Mount> {
+        Self::with_source(mountpoint, args, false)
+    }
+
+    /// Mount, with the source directory on a case-insensitive filesystem
+    /// when `case_insensitive`.
+    fn with_source(mountpoint: &str, args: &[&str], case_insensitive: bool) -> Option<Mount> {
         if !fuse_available() {
             return None;
         }
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
+        let ciopfs = if case_insensitive {
+            if !on_path("ciopfs") {
+                eprintln!("skipped: needs ciopfs for a case-insensitive filesystem");
+                return None;
+            }
+            let back = dir.path().join("back");
+            fs::create_dir_all(&back).unwrap();
+            fs::create_dir_all(&src).unwrap();
+            let status = Command::new("ciopfs")
+                .arg(&back)
+                .arg(&src)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            Some(src.clone())
+        } else {
+            None
+        };
         fs::create_dir_all(src.join(".git/info")).unwrap();
         fs::create_dir_all(src.join("docs")).unwrap();
         fs::write(src.join("veloci.yml"), config()).unwrap();
@@ -70,6 +93,7 @@ impl Mount {
             mountpoint,
             log,
             dir,
+            ciopfs,
         };
         mount.start(args);
         Some(mount)
@@ -158,7 +182,15 @@ impl Mount {
 impl Drop for Mount {
     fn drop(&mut self) {
         self.stop();
+        if let Some(path) = &self.ciopfs {
+            let _ = Command::new("fusermount3").arg("-u").arg(path).status();
+        }
     }
+}
+
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
 fn os_error(result: std::io::Result<impl Sized>) -> i32 {
@@ -304,6 +336,36 @@ fn moves_that_would_reveal_secrets_are_refused() {
     assert_eq!(fs::read_to_string(m.mnt("dir/.env")).unwrap(), ENV_REDACTED);
     // Files without secrets move anywhere.
     fs::rename(m.mnt("readme.txt"), m.mnt("docs/readme.txt")).unwrap();
+}
+
+#[test]
+fn other_spellings_cannot_dodge_rules_on_case_insensitive_filesystems() {
+    let Some(m) = Mount::with_source("mnt", &[], true) else {
+        return;
+    };
+    // `DOCS` is `docs`, which `allow.files` names.
+    assert_eq!(
+        os_error(fs::rename(m.mnt(".env"), m.mnt("DOCS/env"))),
+        EACCES
+    );
+    assert_eq!(
+        os_error(fs::hard_link(m.mnt(".env"), m.mnt("Docs/env"))),
+        EACCES
+    );
+    fs::create_dir(m.mnt("dir")).unwrap();
+    fs::rename(m.mnt(".env"), m.mnt("dir/.env")).unwrap();
+    assert_eq!(
+        os_error(fs::rename(m.mnt("DIR"), m.mnt("DOCS/dir"))),
+        EACCES
+    );
+    // Configuration discovery would find these as `veloci.yml` and `.git`.
+    assert_eq!(os_error(fs::write(m.mnt("dir/Veloci.YML"), "x")), EACCES);
+    assert_eq!(os_error(fs::create_dir(m.mnt("dir/.GIT"))), EACCES);
+    assert!(
+        m.log().contains("denied moving .env to docs/env"),
+        "{}",
+        m.log()
+    );
 }
 
 #[test]

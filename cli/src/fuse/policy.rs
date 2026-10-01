@@ -46,19 +46,32 @@ impl fmt::Display for Reason {
     }
 }
 
+// Names are compared ignoring case: on a case-insensitive filesystem,
+// configuration discovery finds `Veloci.yml` as `veloci.yml`. On a
+// case-sensitive one this refuses a little more than it must.
+
 /// Whether an entry called `name` decides which configuration applies:
 /// a configuration file, or `.git`, where configuration discovery stops.
 pub fn is_config_name(name: &OsStr) -> bool {
-    name == ".git" || CONFIG_FILE_NAMES.iter().any(|n| name == *n)
+    is_git(name) || is_config_file_name(name)
+}
+
+/// Whether `name` is `.git`, in any case.
+pub fn is_git(name: &OsStr) -> bool {
+    name.eq_ignore_ascii_case(".git")
+}
+
+fn is_config_file_name(name: &OsStr) -> bool {
+    CONFIG_FILE_NAMES
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// Whether `path`, relative to the source directory, is a configuration
 /// file: named like one, or `config`, the one named on the command line.
 pub fn is_config_path(path: &Path, config: Option<&Path>) -> bool {
-    config.is_some_and(|c| c == path)
-        || path
-            .file_name()
-            .is_some_and(|name| CONFIG_FILE_NAMES.iter().any(|n| name == *n))
+    config.is_some_and(|c| c.as_os_str().eq_ignore_ascii_case(path))
+        || path.file_name().is_some_and(is_config_file_name)
 }
 
 /// Whether the file whose view is `view` may be overwritten or truncated.
@@ -141,6 +154,8 @@ mod tests {
         assert!(is_config_name(OsStr::new("VELOCI.yml")));
         assert!(is_config_name(OsStr::new(".git")));
         assert!(!is_config_name(OsStr::new("veloci.yaml.bak")));
+        assert!(is_config_name(OsStr::new("Veloci.YML")));
+        assert!(is_config_name(OsStr::new(".GIT")));
         assert!(is_config_path(Path::new("a/veloci.yml"), None));
         assert!(is_config_path(
             Path::new("conf/rules.yml"),
