@@ -1,3 +1,4 @@
+mod fuse;
 mod githook;
 mod scan;
 mod search;
@@ -88,6 +89,28 @@ enum Command {
     /// veloci githook\n' > .git/hooks/pre-commit && chmod +x
     /// .git/hooks/pre-commit`.
     Githook(githook::GithookArgs),
+    /// Mount a redacted view of a directory (Linux).
+    ///
+    /// Every file read through the mount is redacted with the configuration
+    /// found from its own directory, so any tool working in the mount, an AI
+    /// agent's own `cat` or editor included, never sees a secret. Files with
+    /// nothing to redact, and files `allow.files` names, can be written as
+    /// usual; a file holding redacted secrets cannot be written, truncated or
+    /// replaced, since that would overwrite them with tokens. Its mode shows
+    /// no write permission, a refused write fails with `--deny-errno`, and the
+    /// extended attribute `user.veloci.status` says why.
+    ///
+    /// Configuration files (`veloci.yml`, `VELOCI.yml`, `--config`) cannot be
+    /// created, changed, moved or deleted through the mount unless
+    /// `--allow-veloci-yml` is given, and `.git` never can, since both decide
+    /// what is redacted. The configuration is read when mounting, and again
+    /// on SIGHUP.
+    ///
+    /// The mount is a boundary only for processes that cannot reach the
+    /// source directory itself, such as an agent in a sandbox or container
+    /// that sees only the mountpoint.
+    #[command(after_long_help = FUSE_HELP)]
+    Fuse(fuse::FuseArgs),
     /// List the supported input formats.
     Formats,
     /// Print the complete command-line manual.
@@ -243,6 +266,16 @@ Examples:
       --protect secrets/ --protect '*.log' --enforce
 
 Change the choice later by editing the `agent` section of veloci.yml.";
+
+/// Examples for `fuse --help`.
+const FUSE_HELP: &str = "\
+Examples:
+  veloci fuse /tmp/redacted              mirror the Git repository (or current directory)
+  veloci fuse --source ~/proj /tmp/proj  mirror another directory
+  veloci fuse .redacted                  mount inside the repository; it leaves itself out
+  getfattr -n user.veloci.status /tmp/redacted/.env
+
+Unmount with Ctrl-C or `fusermount3 -u MOUNTPOINT`. Needs /dev/fuse and the fuse3 package.";
 
 /// An agent skill embedded in the binary.
 struct Skill {
@@ -417,6 +450,7 @@ fn main() -> ExitCode {
         Command::Grep(args) => search::grep(args),
         Command::Scan(args) => scan::run(args),
         Command::Githook(args) => githook::run(args),
+        Command::Fuse(args) => fuse::run(args),
         Command::Formats => formats(),
         Command::Man => man(),
         Command::Config(ConfigCommand::Show(args)) => show_config(&args),

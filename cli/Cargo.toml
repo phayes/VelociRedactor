@@ -12,6 +12,9 @@ categories = ["command-line-utilities", "text-processing"]
 readme = "README.md"
 
 [features]
+default = ["fuse"]
+# The `fuse` command: mount a redacted view of a directory (Linux).
+fuse = ["dep:fuser", "dep:rustix", "dep:signal-hook", "dep:libc"]
 # Run the privacy_filter model on an NVIDIA GPU. Needs the CUDA toolkit.
 cuda = ["veloci/privacy-filter-cuda"]
 # Use the system OpenBLAS for the privacy_filter model on the CPU (Linux).
@@ -27,6 +30,12 @@ ignore = "0.4"
 rayon = "1"
 serde_json = "1"
 termcolor = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.18", optional = true }
+libc = { version = "0.2", optional = true }
+rustix = { version = "1", features = ["fs", "process"], optional = true }
+signal-hook = { version = "0.3", optional = true }
 
 # Apple Accelerate is always there on macOS, so the binary uses it.
 [target.'cfg(target_os = "macos")'.dependencies]

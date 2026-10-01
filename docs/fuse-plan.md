@@ -86,13 +86,17 @@ at the moment it is opened for writing.** Concretely:
     It is the same thing as overwriting it.
   - `rename`/`link` of a `redacted` file **to a path that would make it `excluded`**
     (`allow.files`): denied. Otherwise `mv .env docs/allowed.txt` would reveal the secret.
-- **Configuration files are read-only through the mount.** Without this, an agent
-  could write `allow: {files: ["*"]}` into `veloci.yml` and then read everything.
+- **Configuration files are read-only through the mount**, unless it is mounted with
+  `--allow-veloci-yml`. Without this, an agent could write `allow: {files: ["*"]}`
+  into `veloci.yml` and then read everything.
   - Writes, truncation, rename onto, rename away, and unlink of any
     `veloci.yml`/`VELOCI.yml` (`CONFIG_FILE_NAMES`), and of the resolved `--config`
     file when it lives under SOURCE, are denied.
   - Creating a new `veloci.yml`/`VELOCI.yml` anywhere in the tree is denied, because
     config discovery would pick it up for that subtree.
+  - `.git` can never be created, moved or deleted through the mount, even with
+    `--allow-veloci-yml`. Config discovery stops at a `.git`, so a new one would
+    cut a subtree off from its configuration.
 - Optional hardening: deny a write whose buffer contains a redaction token
   (`veloci::find_tokens`). This catches an agent writing `[REDACTED-3]` back
   into a file. The file was `clean` and so no secret is lost, but the token is
@@ -270,7 +274,6 @@ unmount to edit secrets.
 ```text
 veloci fuse [OPTIONS] MOUNTPOINT
         --source DIR       Directory to mirror (default: Git root, else current dir)
-        --over             Mount over SOURCE itself (MOUNTPOINT may be omitted)
         --no-git-exclude   Don't add a mountpoint inside the repo to .git/info/exclude
     -c, --config FILE      Configuration file (default: found per file)
         --detector NAME    Also run this disabled detector (repeatable)
@@ -279,6 +282,7 @@ veloci fuse [OPTIONS] MOUNTPOINT
         --raw              Treat every file as plain text
         --deny-errno NAME  Error for denied writes: EACCES (default), EPERM, EKEYREJECTED
         --deny-tokens      Refuse writes containing a redaction token
+        --allow-veloci-yml Allow changing configuration files through the mount
         --read-only        Refuse all writes
         --allow-other      Let other users access the mount
         --status-dir NAME  Serve recent denials in this virtual directory
@@ -376,3 +380,11 @@ that knows the real path.
 3. There is no `--protected-only`. The mount redacts as configured.
 4. Configuration is reloaded only on SIGHUP.
 5. The default `--deny-errno` is `EACCES`, which agrees with `access(W_OK)`.
+6. Configuration files can be changed through the mount only with
+   `--allow-veloci-yml`. `.git` stays protected even then.
+
+## 9. Not yet implemented
+
+- `--over` (mounting over SOURCE itself).
+- `readdirplus` prefetch, and kernel passthrough for excluded and binary files.
+- macOS.
