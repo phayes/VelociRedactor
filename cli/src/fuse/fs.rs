@@ -246,7 +246,23 @@ impl State {
             return name.to_owned();
         }
         match candidates {
-            [] => name.to_owned(),
+            // Filesystems fold case by their own rules, such as `ß` as `ss`:
+            // when no name folds the same way, the entry that is the same
+            // file.
+            [] => {
+                let Ok(target) = self.stat(&dir.join(name)) else {
+                    return name.to_owned();
+                };
+                folded
+                    .values()
+                    .flatten()
+                    .find(|c| {
+                        self.stat(&dir.join(c))
+                            .is_ok_and(|other| same_file(&other, &target))
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| name.to_owned())
+            }
             [only] => only.clone(),
             // Several entries differing only in case: the one that is the
             // same file.
@@ -687,6 +703,22 @@ fn read_range(file: &File, offset: u64, size: u32) -> io::Result<Vec<u8>> {
     }
     data.truncate(filled);
     Ok(data)
+}
+
+/// `path` with its last component as asked for and in both Unicode
+/// normalization forms: the names a new entry may get on disk, since some
+/// filesystems (HFS+, some network servers) normalize the names they store.
+fn spellings(path: &Path) -> Vec<PathBuf> {
+    let mut spellings = vec![path.to_owned()];
+    if let Some(name) = path.file_name().and_then(OsStr::to_str) {
+        for other in [name.nfc().collect::<String>(), name.nfd().collect()] {
+            let other = path.with_file_name(other);
+            if !spellings.contains(&other) {
+                spellings.push(other);
+            }
+        }
+    }
+    spellings
 }
 
 #[allow(clippy::unnecessary_cast)]
@@ -1170,8 +1202,11 @@ impl Filesystem for VelociFs {
                     }
                 }
                 s.may_move(&from, &to)?;
-                if asked != to {
-                    s.may_move(&from, &asked)?;
+                for asked in spellings(&asked) {
+                    if asked != to {
+                        s.may_create(&asked)?;
+                        s.may_move(&from, &asked)?;
+                    }
                 }
                 Ok(())
             };
@@ -1221,11 +1256,14 @@ impl Filesystem for VelociFs {
                 (Err(err), _) | (_, Err(err)) => return reply.error(err),
             };
             let check = || -> Result<(), Refusal> {
-                s.may_create(&to)?;
                 if s.is_config(&from) {
                     return Err(Reason::Config.into());
                 }
-                s.may_move(&from, &to)
+                for to in spellings(&to) {
+                    s.may_create(&to)?;
+                    s.may_move(&from, &to)?;
+                }
+                Ok(())
             };
             if let Err(refusal) = check() {
                 let op = format!("linking {} to", from.display());
@@ -1719,5 +1757,22 @@ impl Filesystem for VelociFs {
             }
             Err(err) => reply.error(errno(err)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spellings_cover_both_normalization_forms() {
+        let composed = Path::new("docs/caf\u{00e9}");
+        let decomposed = Path::new("docs/cafe\u{0301}");
+        assert_eq!(spellings(composed), [composed, decomposed]);
+        assert_eq!(spellings(decomposed), [decomposed, composed]);
+        assert_eq!(
+            spellings(Path::new("docs/plain")),
+            [Path::new("docs/plain")]
+        );
     }
 }
