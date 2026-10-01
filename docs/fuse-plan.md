@@ -8,8 +8,24 @@ read a secret, even with its own `cat`, `grep` or editor, and needs no
 skill or hook to keep it in line.
 
 ```console
-veloci fuse SOURCE MOUNTPOINT [--config FILE] [--detector NAME] [--comments] ...
+veloci fuse MOUNTPOINT [--source DIR] [--config FILE] [--detector NAME] [--comments] ...
 ```
+
+### The source directory
+
+SOURCE is the real directory the mount mirrors. Every path under MOUNTPOINT
+maps to the same relative path under SOURCE. For example, `MOUNTPOINT/config/app.yml` maps to
+`SOURCE/config/app.yml`, and each operation on it is carried out on that real file:
+reads are redacted, writes are checked, and everything else is passed through. Files are
+never copied. SOURCE is also where the rules come from. Each file's configuration
+is found from its real directory under SOURCE, the same way as `veloci redact SOURCE/...`
+would find it, so a `veloci.yml` at the repository root covers the whole mount.
+
+`--source DIR` chooses it. When it is left out, SOURCE is the Git repository root
+holding the current directory, or the current directory outside a repository. This is
+the same rule `veloci init` uses (`git_root(cwd).unwrap_or(cwd)`, as in
+`project_root`). Running `veloci fuse /tmp/proj-redacted` from anywhere in a
+repository therefore mounts the whole repository.
 
 ## 1. Semantics
 
@@ -191,7 +207,8 @@ cli/src/fuse/
 
 ### Validation in `run()`
 
-- SOURCE must exist and be a directory. MOUNTPOINT must be an empty directory.
+- SOURCE (from `--source`, else the Git root, else the current directory) must be a
+  directory. MOUNTPOINT must be an empty directory.
 - The mount is refused when MOUNTPOINT is inside SOURCE, because that recurses, or
   when SOURCE is inside MOUNTPOINT.
 - The configuration is loaded once up front, so that a bad config fails before mounting
@@ -200,7 +217,8 @@ cli/src/fuse/
 ## 4. CLI surface
 
 ```text
-veloci fuse [OPTIONS] SOURCE MOUNTPOINT
+veloci fuse [OPTIONS] MOUNTPOINT
+        --source DIR       Directory to mirror (default: Git root, else current dir)
     -c, --config FILE      Configuration file (default: found per file)
         --detector NAME    Also run this disabled detector (repeatable)
         --comments         Also scan comments
