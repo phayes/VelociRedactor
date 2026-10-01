@@ -40,7 +40,6 @@ current content and the rules that apply to it:
 | `clean`     | redacting finds nothing that the allow list does not permit         | raw (identical) | allowed               |
 | `redacted`  | at least one finding the allow list does not permit                 | redacted view   | **denied**            |
 | `binary`    | NUL byte near the start (same test as `scan`)                       | raw passthrough | allowed               |
-| `too_large` | over `--max-filesize`                                                | **denied**      | **denied**            |
 
 - The rules are worked out for each file, as `scan` and `grep` do: `RulesCache::for_file`, then
   `Rules::redactor_for(path)` (applies `allow.file_paths`) and
@@ -48,9 +47,8 @@ current content and the rules that apply to it:
   and `--comments` affect the result just as they do for `redact`.
 - `--format NAME` / `--raw` work as they do in `redact`, but apply to the whole mount. The
   default is `FormatHint::Path`.
-- `--protected-only` (optional): only files that the `agent.protected` globs match are
-  redacted, and every other file is `excluded`. This suits projects that want the
-  mount to behave like the `enforce` hook.
+- Every file is redacted as configured, whatever its size. There is no size limit.
+  The `agent` section does not narrow what the mount redacts.
 - Binary files are passed through. This matches `scan`, `grep` and `githook`. A
   `--redact-binary` flag could raw-redact them later.
 
@@ -79,15 +77,15 @@ at the moment it is opened for writing.** Concretely:
 - After a write handle is released, the cache entry is dropped, so a secret written
   through the mount is redacted on the next read. Reads through an `O_RDWR` handle
   on a file that has since become `redacted` serve the redacted view.
-- New files (`create`, `mknod`), `mkdir`, `symlink`, `rmdir`: allowed.
+- New files (`create`, `mknod`), `mkdir`, `symlink`: allowed.
+- `unlink` and `rmdir` are always allowed, including on `redacted` files.
+  Deleting a secret does not reveal it. (Configuration files are the exception;
+  see below.)
 - **Namespace operations that could leak a secret or destroy one:**
   - `rename`/`link` **onto** a `redacted` file: denied. This would destroy the secret.
     It is the same thing as overwriting it.
   - `rename`/`link` of a `redacted` file **to a path that would make it `excluded`**
-    (`allow.files`, or outside `agent.protected` with `--protected-only`):
-    denied. Otherwise `mv .env docs/allowed.txt` would reveal the secret.
-  - `unlink` of a `redacted` file: allowed by default (deleting reveals nothing),
-    with `--deny-unlink` for stricter setups. *(Open question, §8.)*
+    (`allow.files`): denied. Otherwise `mv .env docs/allowed.txt` would reveal the secret.
 - **Configuration files are read-only through the mount.** Without this, an agent
   could write `allow: {files: ["*"]}` into `veloci.yml` and then read everything.
   - Writes, truncation, rename onto, rename away, and unlink of any
@@ -142,7 +140,7 @@ plan uses several signals together:
 3. **Extended attribute `user.veloci.status`** on every file, read-only:
    `getfattr -n user.veloci.status .env` →
    `redacted: 2 findings (entropy, credentialed_uri); writes denied`, or
-   `clean`, `excluded (allow.files)`, `binary`, `too_large`,
+   `clean`, `excluded (allow.files)`, `binary`,
    `config file; writes denied`. It also appears in `listxattr`. This gives agents
    and scripts a way to ask *why*. Values are never shown, the same rule as
    `scan` without `--show-value`.
@@ -180,8 +178,12 @@ cli/src/fuse/
   so changes made outside the mount invalidate it. Rendered bytes are kept in an
   LRU cache bounded by `--cache-size` (default 256M), and only for
   `redacted` files. For other classes we keep only the class. It reuses
-  `util::RulesCache` as it is. Config files are reloaded when their mtime changes,
-  and `RulesCache` gains an `invalidate(path)`.
+  `util::RulesCache` as it is. Configuration is loaded once and reloaded **only on
+  SIGHUP**. Edits to `veloci.yml` made outside the mount take effect after
+  `kill -HUP`, never by surprise halfway through a session. A reload swaps in a fresh
+  `RulesCache`, clears the view cache, and asks the kernel to drop cached attrs and
+  pages (`notify_inval_inode`). A configuration that fails to load on SIGHUP is
+  logged, and the old one stays in force.
 - **`inodes.rs`.** Starts path-based, with an `RwLock<HashMap<u64, PathBuf>>` plus a
   reverse map. The FUSE ino is our own counter, with ino 1 = SOURCE, and `st_ino` from
   disk is passed through in attrs. `rename` re-keys the subtree. Paths are
@@ -275,10 +277,7 @@ veloci fuse [OPTIONS] MOUNTPOINT
         --comments         Also scan comments
     -f, --format NAME      Treat every file as this format
         --raw              Treat every file as plain text
-        --protected-only   Redact only files the agent section protects
-        --max-filesize SIZE  Deny larger files (default 10M)
         --deny-errno NAME  Error for denied writes: EACCES (default), EPERM, EKEYREJECTED
-        --deny-unlink      Also refuse deleting files with secrets
         --deny-tokens      Refuse writes containing a redaction token
         --read-only        Refuse all writes
         --allow-other      Let other users access the mount
@@ -310,7 +309,7 @@ that knows the real path.
    macOS targets in `dist-workspace.toml`.
 2. **`view.rs` + `policy.rs` with unit tests, before any FUSE code.**
    Classification over a temp dir, using real configs: `allow.files`, `file_paths`,
-   `--protected-only`, binary, too large, and config-file detection. Write, rename
+   binary, and config-file detection. Write, rename
    and link decisions get a table-driven test.
 3. **`inodes.rs`** with tests for lookup/forget counts and rename re-keying.
 4. **`fs.rs`.** Read-only operations first (`lookup`, `getattr`, `readdir(plus)`,
@@ -336,6 +335,8 @@ that knows the real path.
      terminates, `git status` in SOURCE is clean, and `veloci scan SOURCE` skips it.
    - `--over`: after mounting, `cat SOURCE/.env` shows tokens.
    - An external edit to SOURCE shows up within the TTL.
+   - Deleting a file with secrets works.
+   - An external edit to `veloci.yml` changes nothing until SIGHUP, and takes effect after it.
 8. **CI.** Add `sudo apt-get install -y fuse3` to the Linux job in
    `.github/workflows/rust.yml`. GitHub's Ubuntu runners expose `/dev/fuse`.
 9. **Docs.** A README section ("Mount a redacted view") plus a command-reference
@@ -351,7 +352,9 @@ that knows the real path.
 
 - **Cost of `getattr`.** `ls -l` and IDE indexers stat everything, and each stat
   of an uncached file redacts it. This is mitigated by the cache keyed on file
-  identity, parallel `readdirplus` prefetch, and `--max-filesize`.
+  identity, and parallel `readdirplus` prefetch. Very large files are redacted in
+  full the first time they are touched, and the rendered copy counts against
+  `--cache-size`.
 - **Size changes under a reader.** When a secret is written through the mount, or
   outside it, the redacted size changes. Short TTLs and dropping the cache on
   release keep this bounded. Tools that held an old size may see a short read
@@ -364,13 +367,12 @@ that knows the real path.
   `x.txt` → `x.json`, and so change the findings. This is fine, because the cache key
   includes the inode, and the path is re-read on lookup.
 
-## 8. Open questions
+## 8. Decisions
 
-1. Should `unlink`/`rmdir` of a file with secrets be denied by default? The plan
-   allows it and offers `--deny-unlink`.
-2. Should `too_large` files be denied, as planned, or redacted anyway (slow), or passed
-   through (unsafe)?
-3. Is `--protected-only` worth having in v1, or should the mount always redact
-   everything the rules find?
-4. Should the mount reload `veloci.yml` changes made outside it automatically (planned:
-   by mtime), or only on SIGHUP?
+1. `unlink`/`rmdir` are always allowed, even on files with secrets, because deleting
+   a secret does not reveal it. There is no `--deny-unlink`. Configuration files are
+   still protected (§1).
+2. There is no size limit. Every file is redacted, whatever its size.
+3. There is no `--protected-only`. The mount redacts as configured.
+4. Configuration is reloaded only on SIGHUP.
+5. The default `--deny-errno` is `EACCES`, which agrees with `access(W_OK)`.
