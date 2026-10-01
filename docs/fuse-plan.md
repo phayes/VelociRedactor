@@ -128,13 +128,21 @@ plan uses several signals together:
    such as vim, VS Code and nano notice before writing and open the file read-only
    or warn. Tools that check `access()` never even try the write. We do not mount
    with `default_permissions`, so the filesystem makes this decision itself (§1).
-2. **A configurable errno**, `--deny-errno NAME`. The default is `EACCES`, because
-   tools handle it gracefully. A user who wants the reason to be clear can choose one
-   that ordinary filesystems never return for permissions:
-   - `EPERM` ("Operation not permitted"): distinct from `EACCES` but still generic.
+2. **A configurable errno**, `--deny-errno NAME`. The default is `EPERM`
+   ("Operation not permitted"). By convention, `EACCES` means that the file's
+   permission bits or ACLs deny access, which `chmod` could fix. `EPERM` means that
+   the operation is forbidden by policy, whatever the permissions say. That is exactly
+   this situation, and it already sets the denial apart from an ordinary permission
+   problem. Tools treat both as plain failures, so nothing is lost in compatibility.
+   Other choices:
+   - `EACCES`, for tools that only special-case the classic error.
    - `EKEYREJECTED` ("Key was rejected by service") or `ENOKEY`
      ("Required key not available"). These are Linux-only, unusual and easy to
      search for. macOS falls back to `EPERM`.
+
+   `access(W_OK)` still answers `EACCES`, because that is what callers of `access`
+   expect, and it agrees with the masked mode bits. Only the actual write,
+   truncate, rename and link operations return the configured errno.
 
    This would be validated against an allow-list of names, mapped through
    `libc`, and the help text would document what each one prints.
@@ -276,7 +284,7 @@ veloci fuse [OPTIONS] MOUNTPOINT
         --raw              Treat every file as plain text
         --protected-only   Redact only files the agent section protects
         --max-filesize SIZE  Deny larger files (default 10M)
-        --deny-errno NAME  Error for denied writes: EACCES (default), EPERM, EKEYREJECTED
+        --deny-errno NAME  Error for denied writes: EPERM (default), EACCES, EKEYREJECTED
         --deny-unlink      Also refuse deleting files with secrets
         --deny-tokens      Refuse writes containing a redaction token
         --read-only        Refuse all writes
@@ -367,12 +375,9 @@ that knows the real path.
 
 1. Should `unlink`/`rmdir` of a file with secrets be denied by default? The plan
    allows it and offers `--deny-unlink`.
-2. Default `--deny-errno`: `EACCES` (most compatible) or `EPERM`/`EKEYREJECTED`
-   (most distinct)? The plan defaults to `EACCES`, and the mode bits plus xattr carry
-   the reason.
-3. Should `too_large` files be denied, as planned, or redacted anyway (slow), or passed
+2. Should `too_large` files be denied, as planned, or redacted anyway (slow), or passed
    through (unsafe)?
-4. Is `--protected-only` worth having in v1, or should the mount always redact
+3. Is `--protected-only` worth having in v1, or should the mount always redact
    everything the rules find?
-5. Should the mount reload `veloci.yml` changes made outside it automatically (planned:
+4. Should the mount reload `veloci.yml` changes made outside it automatically (planned:
    by mtime), or only on SIGHUP?
