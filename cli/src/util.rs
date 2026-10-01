@@ -454,7 +454,7 @@ pub fn walk_builder(root: &Path, options: &WalkOptions<'_>) -> Result<WalkBuilde
             .with_context(|| format!("parsing the glob {glob:?}"))?;
     }
     let skipped_dirs = options.skipped_dirs;
-    let mounts = crate::fuse::veloci_mounts();
+    let mounts = crate::mount::veloci_mounts();
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(!options.hidden)
@@ -470,7 +470,7 @@ pub fn walk_builder(root: &Path, options: &WalkOptions<'_>) -> Result<WalkBuilde
         .filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
             let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-            // A `veloci fuse` mount holds redacted copies of files the walk
+            // A `veloci mount` mount holds redacted copies of files the walk
             // reaches anyway.
             let mounted = is_dir
                 && !mounts.is_empty()

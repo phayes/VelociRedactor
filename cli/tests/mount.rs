@@ -1,7 +1,7 @@
-//! `veloci fuse`, mounted for real. Each test is skipped, with a message,
+//! `veloci mount`, mounted for real. Each test is skipped, with a message,
 //! where FUSE is not available.
 
-#![cfg(all(target_os = "linux", feature = "fuse"))]
+#![cfg(all(target_os = "linux", feature = "mount"))]
 
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -101,7 +101,7 @@ impl Mount {
 
     fn start(&mut self, args: &[&str]) {
         let child = Command::new(env!("CARGO_BIN_EXE_veloci"))
-            .arg("fuse")
+            .arg("mount")
             .arg(&self.mountpoint)
             .args(args)
             .current_dir(self.src())
@@ -536,7 +536,7 @@ fn the_mountpoint_must_be_empty() {
     fs::create_dir(dir.path().join("mnt")).unwrap();
     fs::write(dir.path().join("mnt/x"), "").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_veloci"))
-        .args(["fuse", "--source"])
+        .args(["mount", "--source"])
         .arg(dir.path())
         .arg(dir.path().join("mnt"))
         .output()

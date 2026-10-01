@@ -1,4 +1,4 @@
-# Plan: `veloci fuse`
+# Plan: `veloci mount`
 
 Mount a directory through a FUSE filesystem, built on the
 [`fuser`](https://crates.io/crates/fuser) crate (0.18). Every read is redacted,
@@ -8,7 +8,7 @@ read a secret, even with its own `cat`, `grep` or editor, and needs no
 skill or hook to keep it in line.
 
 ```console
-veloci fuse MOUNTPOINT [--source DIR] [--config FILE] [--detector NAME] [--comments] ...
+veloci mount MOUNTPOINT [--source DIR] [--config FILE] [--detector NAME] [--comments] ...
 ```
 
 ### The source directory
@@ -24,7 +24,7 @@ would find it, so a `veloci.yml` at the repository root covers the whole mount.
 `--source DIR` chooses it. When it is left out, SOURCE is the Git repository root
 holding the current directory, or the current directory outside a repository. This is
 the same rule `veloci init` uses (`git_root(cwd).unwrap_or(cwd)`, as in
-`project_root`). Running `veloci fuse /tmp/proj-redacted` from anywhere in a
+`project_root`). Running `veloci mount /tmp/proj-redacted` from anywhere in a
 repository therefore mounts the whole repository.
 
 ## 1. Semantics
@@ -163,12 +163,12 @@ secret, and the agent should follow "Editing protected files" (ask the user).
 
 ## 3. Architecture
 
-New module `cli/src/fuse/`, compiled only on Unix (`#[cfg(unix)]`) behind a
-default-on `fuse` feature of `veloci-cli`:
+New module `cli/src/mount/`, compiled only on Unix (`#[cfg(unix)]`) behind a
+default-on `mount` feature of `veloci-cli`:
 
 ```
-cli/src/fuse/
-  mod.rs       FuseArgs (clap), run(): validation, mount, signal handling
+cli/src/mount/
+  mod.rs       MountArgs (clap), run(): validation, mount, signal handling
   fs.rs        impl fuser::Filesystem for VelociFs — thin, delegates below
   inodes.rs    inode table: ino <-> relative path, lookup counts, rename/unlink upkeep
   view.rs      classify() + content cache; the only place redaction happens
@@ -218,7 +218,7 @@ cli/src/fuse/
 
 ### 3.1 Mounting inside SOURCE
 
-`veloci fuse .redacted`, run in a repository, mounts the redacted view at
+`veloci mount .redacted`, run in a repository, mounts the redacted view at
 `REPO/.redacted`. That directory is inside SOURCE, so the mount would contain itself.
 Without care, there are two problems:
 
@@ -242,7 +242,7 @@ relative to SOURCE, plus its `(dev, ino)` from before mounting:
 Tools that walk the **real** tree descend into the mount and see redacted
 duplicates. That is safe, but slow and noisy:
 
-- **Git.** `veloci fuse` adds the mountpoint to `.git/info/exclude`, and removes
+- **Git.** `veloci mount` adds the mountpoint to `.git/info/exclude`, and removes
   it again on unmount, so `git status` stays clean. `--no-git-exclude` turns this off.
 - **veloci `scan`/`grep`/`agent status`.** These skip directories whose filesystem
   type is `fuse.veloci` (we set the subtype). We check this once per directory with
@@ -272,7 +272,7 @@ unmount to edit secrets.
 ## 4. CLI surface
 
 ```text
-veloci fuse [OPTIONS] MOUNTPOINT
+veloci mount [OPTIONS] MOUNTPOINT
         --source DIR       Directory to mirror (default: Git root, else current dir)
         --no-git-exclude   Don't add a mountpoint inside the repo to .git/info/exclude
     -c, --config FILE      Configuration file (default: found per file)
@@ -291,7 +291,7 @@ veloci fuse [OPTIONS] MOUNTPOINT
 
 `ConfigArg` and `EnableArg` from `util.rs` are flattened in, as `scan` and `grep`
 do. On non-Unix platforms the subcommand still parses, but exits 2 with
-"`veloci fuse` needs FUSE, which is not available on Windows". This keeps the
+"`veloci mount` needs FUSE, which is not available on Windows". This keeps the
 help and manual the same on every platform.
 
 ## 5. Threat model (for the README)
@@ -309,7 +309,7 @@ that knows the real path.
 
 1. **Dependencies.** `fuser = "0.18"` (default features) and `libc` in
    `cli/Cargo.toml` under `[target.'cfg(unix)'.dependencies]`, behind a
-   default-on `fuse` feature. Check that `cargo build` still works on the Windows and
+   default-on `mount` feature. Check that `cargo build` still works on the Windows and
    macOS targets in `dist-workspace.toml`.
 2. **`view.rs` + `policy.rs` with unit tests, before any FUSE code.**
    Classification over a temp dir, using real configs: `allow.files`, `file_paths`,
@@ -323,9 +323,9 @@ that knows the real path.
    `mknod`, `unlink`, `rmdir`, `symlink`, `rename`, `link`, `flush`, `fsync`,
    `setxattr`, `removexattr`, with the decisions from `policy.rs`.
 6. **Signals.** Mode-bit masking, `--deny-errno`, xattr, log, optional status dir.
-7. **Integration tests** (`cli/tests/fuse.rs`, `#[cfg(target_os = "linux")]`).
+7. **Integration tests** (`cli/tests/mount.rs`, `#[cfg(target_os = "linux")]`).
    Each test skips with a message when `/dev/fuse` or `fusermount3` is missing.
-   They mount a temp dir with `veloci fuse` in the background and cover:
+   They mount a temp dir with `veloci mount` in the background and cover:
    - `cat` shows tokens, `stat` size equals the redacted length, `grep secret` finds nothing.
    - Appending to a clean file works, and the next read redacts a secret written that way.
    - `open(O_WRONLY)`, `O_TRUNC` and `truncate` on a secret file fail with the

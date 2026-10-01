@@ -1,4 +1,4 @@
-//! `veloci fuse`: mount a redacted view of a directory.
+//! `veloci mount`: mount a redacted view of a directory.
 //!
 //! The arguments parse on every platform, so the help and the manual are the
 //! same everywhere; the filesystem itself is Linux only.
@@ -12,27 +12,27 @@ use clap::Args;
 
 use crate::util::ConfigArg;
 
-#[cfg(all(target_os = "linux", feature = "fuse"))]
+#[cfg(all(target_os = "linux", feature = "mount"))]
 mod fs;
-#[cfg(all(target_os = "linux", feature = "fuse"))]
+#[cfg(all(target_os = "linux", feature = "mount"))]
 mod inodes;
-#[cfg(all(target_os = "linux", feature = "fuse"))]
-mod mount;
-#[cfg(all(target_os = "linux", feature = "fuse"))]
+#[cfg(all(target_os = "linux", feature = "mount"))]
 mod policy;
-#[cfg(all(target_os = "linux", feature = "fuse"))]
+#[cfg(all(target_os = "linux", feature = "mount"))]
+mod session;
+#[cfg(all(target_os = "linux", feature = "mount"))]
 mod status;
-#[cfg(all(target_os = "linux", feature = "fuse"))]
+#[cfg(all(target_os = "linux", feature = "mount"))]
 mod view;
 
-#[cfg(all(target_os = "linux", feature = "fuse"))]
-pub use mount::veloci_mounts;
+#[cfg(all(target_os = "linux", feature = "mount"))]
+pub use session::veloci_mounts;
 
 /// The errors `--deny-errno` accepts.
 pub const DENY_ERRNOS: &[&str] = &["EACCES", "EPERM", "EKEYREJECTED", "ENOKEY"];
 
 #[derive(Debug, Args)]
-pub struct FuseArgs {
+pub struct MountArgs {
     /// Empty directory to mount the redacted view on. It may be inside the
     /// source directory; the view then leaves it out.
     pub mountpoint: PathBuf,
@@ -111,20 +111,20 @@ fn parse_errno(text: &str) -> Result<String, String> {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "fuse"))]
-pub fn run(args: FuseArgs) -> Result<ExitCode> {
-    mount::run(args)
+#[cfg(all(target_os = "linux", feature = "mount"))]
+pub fn run(args: MountArgs) -> Result<ExitCode> {
+    session::run(args)
 }
 
-#[cfg(not(all(target_os = "linux", feature = "fuse")))]
-pub fn run(_args: FuseArgs) -> Result<ExitCode> {
-    eprintln!("veloci: `veloci fuse` needs FUSE, which this build does not support (Linux only)");
+#[cfg(not(all(target_os = "linux", feature = "mount")))]
+pub fn run(_args: MountArgs) -> Result<ExitCode> {
+    eprintln!("veloci: `veloci mount` needs FUSE, which this build does not support (Linux only)");
     Ok(ExitCode::from(2))
 }
 
-/// Mountpoints of `veloci fuse` filesystems, which directory walks skip:
+/// Mountpoints of `veloci mount` filesystems, which directory walks skip:
 /// they hold redacted copies of files that are already being walked.
-#[cfg(not(all(target_os = "linux", feature = "fuse")))]
+#[cfg(not(all(target_os = "linux", feature = "mount")))]
 pub fn veloci_mounts() -> Vec<PathBuf> {
     Vec::new()
 }

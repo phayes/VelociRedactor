@@ -16,7 +16,7 @@ use fuser::{Config, Errno, INodeNo, MountOption, SessionACL};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-use super::FuseArgs;
+use super::MountArgs;
 use super::fs::{State, VelociFs};
 use super::status::DenialLog;
 use super::view::{Classifier, Hint};
@@ -29,7 +29,7 @@ enum Event {
     Ended,
 }
 
-pub fn run(args: FuseArgs) -> Result<ExitCode> {
+pub fn run(args: MountArgs) -> Result<ExitCode> {
     let cwd = std::env::current_dir().context("determining the current directory")?;
     let source = match &args.source {
         Some(dir) => dir.clone(),
@@ -111,7 +111,7 @@ pub fn run(args: FuseArgs) -> Result<ExitCode> {
     let threads = thread::available_parallelism().map_or(4, |n| n.get().max(4));
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
-        .thread_name(|i| format!("veloci-fuse-{i}"))
+        .thread_name(|i| format!("veloci-mount-{i}"))
         .build()
         .context("starting worker threads")?;
     let filesystem = VelociFs {
@@ -229,7 +229,7 @@ pub fn run(args: FuseArgs) -> Result<ExitCode> {
 }
 
 /// The configurations, checked by loading the one for the source directory.
-fn load(args: &FuseArgs, source: &Path, hint: &Hint) -> Result<Classifier> {
+fn load(args: &MountArgs, source: &Path, hint: &Hint) -> Result<Classifier> {
     let rules = RulesCache::new(args.config.clone());
     let root_rules = rules.for_directory(Some(source))?;
     if let Hint::Name(name) = hint
@@ -258,7 +258,7 @@ struct GitExclude {
     created: bool,
 }
 
-const EXCLUDE_COMMENT: &str = "# veloci fuse: a redacted view, while it is mounted";
+const EXCLUDE_COMMENT: &str = "# veloci mount: a redacted view, while it is mounted";
 
 impl GitExclude {
     fn add(mountpoint: &Path) -> Option<Self> {
@@ -304,7 +304,7 @@ impl GitExclude {
     }
 }
 
-/// Mountpoints of `veloci fuse` filesystems, which directory walks skip:
+/// Mountpoints of `veloci mount` filesystems, which directory walks skip:
 /// they hold redacted copies of files that are already being walked.
 pub fn veloci_mounts() -> Vec<PathBuf> {
     let Ok(text) = fs::read_to_string("/proc/self/mountinfo") else {

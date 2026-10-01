@@ -214,15 +214,15 @@ Use `--dir DIR` for another location, `--repo OWNER/NAME` for another model repo
 
 ## Mount a redacted view
 
-`veloci fuse` (Linux) mounts a view of a directory in which every file reads redacted. Any tool working in the mount, including an AI agent's own `cat`, `grep` or editor, never sees a secret:
+`veloci mount` (Linux) mounts a view of a directory in which every file reads redacted. Any tool working in the mount, including an AI agent's own `cat`, `grep` or editor, never sees a secret:
 
 ```console
-$ veloci fuse /tmp/redacted        # mirrors the Git repository, or the current directory
+$ veloci mount /tmp/redacted        # mirrors the Git repository, or the current directory
 $ cat /tmp/redacted/.env
 DB_PASSWORD=[REDACTED-1]
 ```
 
-Choose another directory with `--source DIR`. The mountpoint must be an empty directory. It may be inside the source directory, such as `veloci fuse .redacted`; the view then leaves the mountpoint out, and it is added to `.git/info/exclude` while mounted. Unmount with Ctrl-C or `fusermount3 -u MOUNTPOINT`. The `fuse3` package provides `fusermount3`.
+Choose another directory with `--source DIR`. The mountpoint must be an empty directory. It may be inside the source directory, such as `veloci mount .redacted`; the view then leaves the mountpoint out, and it is added to `.git/info/exclude` while mounted. Unmount with Ctrl-C or `fusermount3 -u MOUNTPOINT`. The `fuse3` package provides `fusermount3`.
 
 Each file is redacted with the configuration found from its own directory, and `--config`, `--detector`, `--comments`, `--format` and `--raw` work as they do for `redact`. Files with nothing to redact, files `allow.files` names, and binary files read as they are and can be written as usual. A file holding redacted secrets can't be written, truncated or replaced, because that would overwrite the secrets with tokens. Deleting it is allowed. Moving or linking it is refused when its secrets would not be redacted at the new path, such as into a directory `allow.files` names.
 
@@ -330,7 +330,7 @@ veloci scan [OPTIONS] [PATH...]
     -d, --max-depth NUM    Limit directory depth
         --max-filesize SIZE  Skip larger files (default 10M)
 
-veloci fuse [OPTIONS] MOUNTPOINT
+veloci mount [OPTIONS] MOUNTPOINT
         --source DIR       Directory to mirror (default: Git root, else current dir)
     -c, --config FILE      Configuration file (default: found per file)
         --detector NAME    Also run this disabled detector (repeatable)

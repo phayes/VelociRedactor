@@ -97,9 +97,9 @@ Your view of the file is redacted, so the rules for editing it are strict:
 - Never rewrite a whole protected file, because that would write the tokens back.
 - If the change can't be made without touching a redacted value, **stop and ask the user to make it**. Tell them exactly what to change, for example: "In `.env`, set `DATABASE_URL` to the new host `db2.internal`, keeping the existing password." Then carry on once they confirm.
 
-## Working in a `veloci fuse` mount
+## Working in a `veloci mount` mount
 
-You may be working in a directory mounted with `veloci fuse`. Every file there already reads redacted, so your usual tools are safe. You can tell from `mount | grep veloci`, or from `getfattr --only-values -n user.veloci.status FILE`, which every file in the mount carries.
+You may be working in a directory mounted with `veloci mount`. Every file there already reads redacted, so your usual tools are safe. You can tell from `mount | grep veloci`, or from `getfattr --only-values -n user.veloci.status FILE`, which every file in the mount carries.
 
 - A write that fails with "Permission denied" (or "Operation not permitted", or "Key was rejected by service") on a file whose mode has no write permission means the file holds redacted secrets. Check its `user.veloci.status`. Follow the rules above: make the change with no token in it, or ask the user to make it. Don't retry another way.
 - `veloci.yml` files and `.git` can't be changed through the mount. Ask the user.

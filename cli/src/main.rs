@@ -1,5 +1,5 @@
-mod fuse;
 mod githook;
+mod mount;
 mod scan;
 mod search;
 mod util;
@@ -109,8 +109,8 @@ enum Command {
     /// The mount is a boundary only for processes that cannot reach the
     /// source directory itself, such as an agent in a sandbox or container
     /// that sees only the mountpoint.
-    #[command(after_long_help = FUSE_HELP)]
-    Fuse(fuse::FuseArgs),
+    #[command(after_long_help = MOUNT_HELP)]
+    Mount(mount::MountArgs),
     /// List the supported input formats.
     Formats,
     /// Print the complete command-line manual.
@@ -267,12 +267,12 @@ Examples:
 
 Change the choice later by editing the `agent` section of veloci.yml.";
 
-/// Examples for `fuse --help`.
-const FUSE_HELP: &str = "\
+/// Examples for `mount --help`.
+const MOUNT_HELP: &str = "\
 Examples:
-  veloci fuse /tmp/redacted              mirror the Git repository (or current directory)
-  veloci fuse --source ~/proj /tmp/proj  mirror another directory
-  veloci fuse .redacted                  mount inside the repository; it leaves itself out
+  veloci mount /tmp/redacted              mirror the Git repository (or current directory)
+  veloci mount --source ~/proj /tmp/proj  mirror another directory
+  veloci mount .redacted                  mount inside the repository; it leaves itself out
   getfattr -n user.veloci.status /tmp/redacted/.env
 
 Unmount with Ctrl-C or `fusermount3 -u MOUNTPOINT`. Needs /dev/fuse and the fuse3 package.";
@@ -450,7 +450,7 @@ fn main() -> ExitCode {
         Command::Grep(args) => search::grep(args),
         Command::Scan(args) => scan::run(args),
         Command::Githook(args) => githook::run(args),
-        Command::Fuse(args) => fuse::run(args),
+        Command::Mount(args) => mount::run(args),
         Command::Formats => formats(),
         Command::Man => man(),
         Command::Config(ConfigCommand::Show(args)) => show_config(&args),

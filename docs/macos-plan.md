@@ -1,21 +1,21 @@
-# Plan: `veloci fuse` on macOS (macFUSE, kernel-extension backend)
+# Plan: `veloci mount` on macOS (macFUSE, kernel-extension backend)
 
-`veloci fuse` currently builds only on Linux. This plan adds macOS support on
+`veloci mount` currently builds only on Linux. This plan adds macOS support on
 top of [macFUSE](https://macfuse.github.io), using its kernel-extension
 backend. It is meant to be carried out on a Mac. Nothing here has been run on
 macOS yet, so every step ends with something to verify.
 
-Read `docs/fuse-plan.md` first for what the command does. Only the FUSE
-adapter is platform-specific. `cli/src/fuse/view.rs`, `policy.rs`,
+Read `docs/mount-plan.md` first for what the command does. Only the FUSE
+adapter is platform-specific. `cli/src/mount/view.rs`, `policy.rs`,
 `status.rs` and `inodes.rs` hold the rules, and should not need changes
 beyond small `cfg`s.
 
 ## Goals
 
-- `veloci fuse` works on macOS when macFUSE is installed and its system
+- `veloci mount` works on macOS when macFUSE is installed and its system
   extension is allowed.
 - **The released binary launches without macFUSE.** We never link libfuse.
-  It is loaded at runtime only when `veloci fuse` runs, and a missing library
+  It is loaded at runtime only when `veloci mount` runs, and a missing library
   is a clear error, not a crash at launch.
 - Every rule from Linux holds: reads redacted, protected files unwritable,
   reveal checks on moves, configuration and `.git` protected, SIGHUP reload.
@@ -25,7 +25,7 @@ the end.
 
 ## 1. Dependencies and `cfg`s
 
-In `cli/Cargo.toml`, the `fuse` dependencies are under
+In `cli/Cargo.toml`, the `mount` dependencies are under
 `[target.'cfg(target_os = "linux")'.dependencies]`. Add a macOS section:
 
 ```toml
@@ -39,17 +39,17 @@ signal-hook = { version = "0.3", optional = true }
 unicode-normalization = { version = "0.1", optional = true }
 ```
 
-Add `"dep:libloading"` to the `fuse` feature. Cargo allows a feature to name an
+Add `"dep:libloading"` to the `mount` feature. Cargo allows a feature to name an
 optional dependency that only exists on some targets.
 
 Without `macos-no-mount`, fuser's build script runs `pkg-config` for macFUSE,
 and fails on any Mac without it, CI runners included. With it, fuser builds
 anywhere and expects `Session::from_fd`.
 
-In `cli/src/fuse/mod.rs`, change every
-`#[cfg(all(target_os = "linux", feature = "fuse"))]` to
-`#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]`,
-and its negations to match. Do the same in `cli/tests/fuse.rs`.
+In `cli/src/mount/mod.rs`, change every
+`#[cfg(all(target_os = "linux", feature = "mount"))]` to
+`#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "mount"))]`,
+and its negations to match. Do the same in `cli/tests/mount.rs`.
 
 **Verify:** `cargo build` and `cargo clippy --all-targets` on macOS, with
 and without macFUSE installed.
@@ -59,7 +59,7 @@ and without macFUSE installed.
 On macOS, fuser uses exactly one libfuse function to mount:
 `fuse_mount_compat25(mountpoint, args) -> fd`. Unmounting is
 `unmount(2)` (see fuser's `src/mnt/fuse2.rs` and `src/mnt/mod.rs`). We do the
-same through `libloading`. Put this in a new `cli/src/fuse/macos.rs`, compiled
+same through `libloading`. Put this in a new `cli/src/mount/macos.rs`, compiled
 only on macOS:
 
 1. **Load the library.** Try `$VELOCI_LIBFUSE` if set, then
@@ -67,12 +67,12 @@ only on macOS:
    is where the macFUSE installer puts them, on Intel and Apple Silicon
    alike. Check that this is still true for the installed macFUSE version. If
    none loads, fail with:
-   `veloci fuse needs macFUSE: brew install --cask macfuse (https://macfuse.github.io)`,
+   `veloci mount needs macFUSE: brew install --cask macfuse (https://macfuse.github.io)`,
    exit status 2.
 2. **Build the arguments** exactly as fuser's `with_fuse_args` in
    `src/mnt/mod.rs` does: `argv = ["veloci", "-o", OPT, "-o", OPT, ...]` and a
    `#[repr(C)] struct fuse_args { argc: c_int, argv: *const *const c_char, allocated: c_int }`
-   with `allocated: 0`. Use the options from `mount.rs`, plus these macOS ones:
+   with `allocated: 0`. Use the options from `session.rs`, plus these macOS ones:
    - `fsname=veloci:<source>`. This keeps `veloci_mounts()` working (section 4).
    - `volname=veloci <source dir name>`, the name Finder shows.
    - `noappledouble`, so Finder doesn't write `.DS_Store` and `._*` files into
@@ -88,14 +88,14 @@ only on macOS:
    System Settings > Privacy & Security).
 4. **Run:** `fuser::Session::from_fd(filesystem, OwnedFd::from_raw_fd(fd), acl, config)`,
    then `.spawn()`. The resulting `BackgroundSession` does not unmount on its
-   own, so the stop path in `mount.rs` must call `libc::unmount(mountpoint, 0)`
+   own, so the stop path in `session.rs` must call `libc::unmount(mountpoint, 0)`
    and then `join()`. Fall back to `MNT_FORCE` if the first attempt reports busy.
 5. **Threads:** fuser refuses `n_threads != 1` on macOS. Set
    `config.n_threads = None` and `clone_fd = false` there. The worker pool
    already answers slow requests (`VelociFs::spawn`), so one fuser thread is
    enough.
 
-Keep Linux on `fuser::spawn_mount`. Give `mount.rs` a small
+Keep Linux on `fuser::spawn_mount`. Give `session.rs` a small
 `fn mount(filesystem, mountpoint, options) -> Result<Mounted>` with a Linux and
 a macOS implementation, where `Mounted` knows how to unmount and join.
 
@@ -125,7 +125,7 @@ Also in `fs.rs`: `virtual_attr` uses `rustix::process::geteuid`, which is fine.
 **Verify:** `cargo clippy --all-targets` is clean on macOS, and
 `xattr -p veloci.status MOUNT/.env` prints `redacted: 1 finding ...`.
 
-## 4. Replacing the Linux-only calls in `mount.rs`
+## 4. Replacing the Linux-only calls in `session.rs`
 
 - **`veloci_mounts()`** reads `/proc/self/mountinfo`. On macOS, use
   `libc::getmntinfo(&mut ptr, MNT_NOWAIT)` and pick entries whose
@@ -133,8 +133,8 @@ Also in `fs.rs`: `virtual_attr` uses `rustix::process::geteuid`, which is fine.
   `osxfuse` or `fusefs`; check what macFUSE reports). Return `f_mntonname`.
   `scan`, `grep` and `agent status` then skip a mount inside the repository.
 - **Messages and help** mention `fusermount3`. On macOS, say `umount MOUNTPOINT`
-  (or `diskutil unmount MOUNTPOINT`). Make the unmount hint in `mount.rs` and
-  `FUSE_HELP` in `main.rs` platform-specific, and change the `Fuse` command's
+  (or `diskutil unmount MOUNTPOINT`). Make the unmount hint in `session.rs` and
+  `MOUNT_HELP` in `main.rs` platform-specific, and change the `Mount` command's
   "(Linux)" to "(Linux, and macOS with macFUSE)".
 
 ## 5. Things to check on a real Mac
@@ -171,7 +171,7 @@ Also in `fs.rs`: `virtual_attr` uses `rustix::process::geteuid`, which is fine.
 
 ## 6. Tests
 
-`cli/tests/fuse.rs` needs:
+`cli/tests/mount.rs` needs:
 
 - **`cfg`:** `any(target_os = "linux", target_os = "macos")`.
 - **`fuse_available()`:** on macOS, the libfuse dylib exists. If a mount still
@@ -207,17 +207,17 @@ hand on a Mac, as in section 5.
   `EKEYREJECTED`/`ENOKEY` are Linux-only.
 - **`plugin/skills/veloci/SKILL.md` and its `cli/skills` copy:** mention
   `xattr -p veloci.status` alongside `getfattr`.
-- **`docs/fuse-plan.md`:** move macOS out of "Not yet implemented".
+- **`docs/mount-plan.md`:** move macOS out of "Not yet implemented".
 
 ## 8. Release
 
 The dist targets already include `aarch64-apple-darwin` and
-`x86_64-apple-darwin`, and `fuse` is a default feature, so the macOS release
+`x86_64-apple-darwin`, and `mount` is a default feature, so the macOS release
 binaries pick this up with no change. Nothing is linked, so Homebrew needs no
 dependency on macFUSE. Mention it in the formula's caveats if the tap allows.
 
 **Verify:** a release build runs `veloci --help` and `veloci redact` on a Mac
-**without** macFUSE installed, and `veloci fuse` there prints the
+**without** macFUSE installed, and `veloci mount` there prints the
 install message.
 
 ## Later

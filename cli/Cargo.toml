@@ -12,9 +12,9 @@ categories = ["command-line-utilities", "text-processing"]
 readme = "README.md"
 
 [features]
-default = ["fuse"]
-# The `fuse` command: mount a redacted view of a directory (Linux).
-fuse = ["dep:fuser", "dep:rustix", "dep:signal-hook", "dep:libc", "dep:unicode-normalization"]
+default = ["mount"]
+# The `mount` command: mount a redacted view of a directory (Linux).
+mount = ["dep:fuser", "dep:rustix", "dep:signal-hook", "dep:libc", "dep:unicode-normalization"]
 # Run the privacy_filter model on an NVIDIA GPU. Needs the CUDA toolkit.
 cuda = ["veloci/privacy-filter-cuda"]
 # Use the system OpenBLAS for the privacy_filter model on the CPU (Linux).
