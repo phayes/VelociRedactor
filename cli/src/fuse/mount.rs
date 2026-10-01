@@ -108,8 +108,15 @@ pub fn run(args: FuseArgs) -> Result<ExitCode> {
 
     let (events, waiting) = mpsc::channel();
     let ended = events.clone();
+    let threads = thread::available_parallelism().map_or(4, |n| n.get().max(4));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|i| format!("veloci-fuse-{i}"))
+        .build()
+        .context("starting worker threads")?;
     let filesystem = VelociFs {
         state: state.clone(),
+        pool,
         on_destroy: Box::new(move || {
             let _ = ended.send(Event::Ended);
         }),
@@ -132,7 +139,9 @@ pub fn run(args: FuseArgs) -> Result<ExitCode> {
         config.acl = SessionACL::All;
     }
     config.mount_options = options;
-    config.n_threads = Some(thread::available_parallelism().map_or(4, |n| n.get().max(2)));
+    // Slow requests go to the pool; these threads only read requests and
+    // answer the quick ones.
+    config.n_threads = Some(2);
     config.clone_fd = true;
 
     let exclude = if args.no_git_exclude {

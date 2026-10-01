@@ -26,9 +26,10 @@ use fuser::{
     Request, TimeOrNow, WriteFlags,
 };
 use rustix::fs::{self as rfs, AtFlags, Mode, OFlags, Stat, Timespec, Timestamps, XattrFlags};
+use unicode_normalization::UnicodeNormalization;
 
 use super::inodes::{DENIALS, Inodes, ROOT, STATUS_DIR};
-use super::policy::{self, Reason, is_config_name, is_config_path, is_git};
+use super::policy::{self, Reason, fold, is_config_name, is_config_path, is_git};
 use super::status::{self, DenialLog, STATUS_XATTR};
 use super::view::{Class, Classifier, Key, View, ViewCache};
 use crate::util::Rules;
@@ -206,13 +207,19 @@ impl State {
             return name.to_owned();
         };
         // Fast path: no other spelling of the name exists, so it is exact.
+        // The other spellings tried are the other case and the other Unicode
+        // normalization forms.
         let upper = text.to_uppercase();
         let flipped = if upper != text {
             upper
         } else {
             text.to_lowercase()
         };
-        if flipped == text || self.stat(&dir.join(&flipped)).is_err() {
+        let others = [flipped, text.nfc().collect(), text.nfd().collect()];
+        if !others
+            .iter()
+            .any(|other| other != text && self.stat(&dir.join(other)).is_ok())
+        {
             return name.to_owned();
         }
         let Ok(dir_stat) = self.stat(dir) else {
@@ -226,8 +233,7 @@ impl State {
             };
             let mut folded = FoldedNames::new();
             for entry in listing {
-                let fold = entry.to_string_lossy().to_lowercase();
-                folded.entry(fold).or_default().push(entry);
+                folded.entry(fold(&entry)).or_default().push(entry);
             }
             if names.len() >= 4096 {
                 names.clear();
@@ -235,9 +241,7 @@ impl State {
             names.insert(dir.to_owned(), (key, folded));
         }
         let (_, folded) = &names[dir];
-        let candidates = folded
-            .get(&text.to_lowercase())
-            .map_or(&[][..], Vec::as_slice);
+        let candidates = folded.get(&fold(name)).map_or(&[][..], Vec::as_slice);
         if candidates.iter().any(|c| c == name) {
             return name.to_owned();
         }
@@ -511,13 +515,13 @@ impl State {
         policy::may_move(&view.class, &moved.class).map_err(Refusal::from)
     }
 
-    /// Report `refusal` of `op` on `path` by the process behind `req`, and
+    /// Report `refusal` of `op` on `path` by process `pid`, and
     /// the error to answer with.
-    fn refuse(&self, req: &Request, op: &str, path: &Path, refusal: Refusal) -> Errno {
+    fn refuse(&self, pid: u32, op: &str, path: &Path, refusal: Refusal) -> Errno {
         match refusal {
             Refusal::Errno(err) => err,
             Refusal::Reason(reason) => {
-                self.log.deny(req.pid(), op, path, &reason);
+                self.log.deny(pid, op, path, &reason);
                 self.deny
             }
         }
@@ -801,8 +805,19 @@ fn reply_xattr(reply: ReplyXattr, size: u32, data: &[u8]) {
 /// The FUSE filesystem over [`State`].
 pub struct VelociFs {
     pub state: Arc<State>,
+    /// Threads for requests that may redact a file.
+    pub pool: rayon::ThreadPool,
     /// Called when the session ends, however it ends.
     pub on_destroy: Box<dyn Fn() + Send + Sync>,
+}
+
+impl VelociFs {
+    /// Answer a request on the pool, so that redacting a large file holds up
+    /// only the requests waiting for that file.
+    fn spawn(&self, work: impl FnOnce(&State) + Send + 'static) {
+        let state = self.state.clone();
+        self.pool.spawn(move || work(&state));
+    }
 }
 
 impl Filesystem for VelociFs {
@@ -811,28 +826,31 @@ impl Filesystem for VelociFs {
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        let s = &self.state;
-        if parent.0 == ROOT && s.status_dir.as_deref() == Some(name) {
-            return reply.entry(&TTL, &s.virtual_attr(STATUS_DIR), Generation(0));
-        }
-        if parent.0 == STATUS_DIR {
-            return if name == "denials" {
-                reply.entry(&TTL, &s.virtual_attr(DENIALS), Generation(0))
-            } else {
-                reply.error(Errno::ENOENT)
+        let name = name.to_owned();
+        self.spawn(move |s| {
+            let name = name.as_os_str();
+            if parent.0 == ROOT && s.status_dir.as_deref() == Some(name) {
+                return reply.entry(&TTL, &s.virtual_attr(STATUS_DIR), Generation(0));
+            }
+            if parent.0 == STATUS_DIR {
+                return if name == "denials" {
+                    reply.entry(&TTL, &s.virtual_attr(DENIALS), Generation(0))
+                } else {
+                    reply.error(Errno::ENOENT)
+                };
+            }
+            let path = match s.child(parent, name) {
+                Ok(path) => path,
+                Err(err) => return reply.error(err),
             };
-        }
-        let path = match s.child(parent, name) {
-            Ok(path) => path,
-            Err(err) => return reply.error(err),
-        };
-        if s.reserved(&path) {
-            return reply.error(Errno::ENOENT);
-        }
-        match s.entry(&path) {
-            Ok(attr) => reply.entry(&TTL, &attr, Generation(0)),
-            Err(err) => reply.error(err),
-        }
+            if s.reserved(&path) {
+                return reply.error(Errno::ENOENT);
+            }
+            match s.entry(&path) {
+                Ok(attr) => reply.entry(&TTL, &attr, Generation(0)),
+                Err(err) => reply.error(err),
+            }
+        });
     }
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
@@ -840,33 +858,34 @@ impl Filesystem for VelociFs {
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
-        let s = &self.state;
-        if ino.0 == STATUS_DIR || ino.0 == DENIALS {
-            return reply.attr(&TTL, &s.virtual_attr(ino.0));
-        }
-        let path = s.inodes.path(ino.0);
-        let result = match (&path, fh.map(|fh| s.handle(fh))) {
-            (Some(path), _) => s.stat(path).map(|st| s.attr(ino.0, Some(path), &st)),
-            // A deleted file, still open.
-            (None, Some(Ok(handle))) => match &*handle {
-                Handle::File(open) => rfs::fstat(&open.file).map_err(errno).map(|st| {
-                    let mut attr = file_attr(ino.0, &st);
-                    if let Ok((_, view)) = open.current(s) {
-                        attr.size = view.size;
-                        if view.protects() {
-                            attr.perm &= !0o222;
+        self.spawn(move |s| {
+            if ino.0 == STATUS_DIR || ino.0 == DENIALS {
+                return reply.attr(&TTL, &s.virtual_attr(ino.0));
+            }
+            let path = s.inodes.path(ino.0);
+            let result = match (&path, fh.map(|fh| s.handle(fh))) {
+                (Some(path), _) => s.stat(path).map(|st| s.attr(ino.0, Some(path), &st)),
+                // A deleted file, still open.
+                (None, Some(Ok(handle))) => match &*handle {
+                    Handle::File(open) => rfs::fstat(&open.file).map_err(errno).map(|st| {
+                        let mut attr = file_attr(ino.0, &st);
+                        if let Ok((_, view)) = open.current(s) {
+                            attr.size = view.size;
+                            if view.protects() {
+                                attr.perm &= !0o222;
+                            }
                         }
-                    }
-                    attr
-                }),
-                _ => Err(Errno::ENOENT),
-            },
-            (None, _) => Err(Errno::ENOENT),
-        };
-        match result {
-            Ok(attr) => reply.attr(&TTL, &attr),
-            Err(err) => reply.error(err),
-        }
+                        attr
+                    }),
+                    _ => Err(Errno::ENOENT),
+                },
+                (None, _) => Err(Errno::ENOENT),
+            };
+            match result {
+                Ok(attr) => reply.attr(&TTL, &attr),
+                Err(err) => reply.error(err),
+            }
+        });
     }
 
     fn setattr(
@@ -887,93 +906,96 @@ impl Filesystem for VelociFs {
         _flags: Option<fuser::BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        let s = &self.state;
-        let path = match s.path(ino) {
-            Ok(path) => path,
-            Err(err) => return reply.error(err),
-        };
-        let result = (|| -> Result<(), Refusal> {
-            if let Some(size) = size {
-                let open = fh.and_then(|fh| s.handle(fh).ok());
-                match open.as_deref() {
-                    // Checked when it was opened.
-                    Some(Handle::File(open)) if open.writable => {
-                        rfs::ftruncate(&open.file, size).map_err(errno)?;
-                        open.forget_view();
+        let pid = req.pid();
+        self.spawn(move |s| {
+            let path = match s.path(ino) {
+                Ok(path) => path,
+                Err(err) => return reply.error(err),
+            };
+            let result = (|| -> Result<(), Refusal> {
+                if let Some(size) = size {
+                    let open = fh.and_then(|fh| s.handle(fh).ok());
+                    match open.as_deref() {
+                        // Checked when it was opened.
+                        Some(Handle::File(open)) if open.writable => {
+                            rfs::ftruncate(&open.file, size).map_err(errno)?;
+                            open.forget_view();
+                        }
+                        _ => {
+                            s.may_write(&path)?;
+                            let file = s.open(&path, OFlags::WRONLY, Mode::empty())?;
+                            rfs::ftruncate(&file, size).map_err(errno)?;
+                        }
                     }
-                    _ => {
-                        s.may_write(&path)?;
-                        let file = s.open(&path, OFlags::WRONLY, Mode::empty())?;
-                        rfs::ftruncate(&file, size).map_err(errno)?;
+                    s.changed(&path);
+                }
+                if let Some(mode) = mode {
+                    let stat = s.stat(&path)?;
+                    // Linux cannot change a symbolic link's mode.
+                    if mode_type(stat.st_mode) != FileType::Symlink {
+                        rfs::chmodat(
+                            &s.root,
+                            at(&path),
+                            Mode::from_raw_mode(mode & 0o7777),
+                            AtFlags::empty(),
+                        )
+                        .map_err(errno)?;
                     }
                 }
-                s.changed(&path);
-            }
-            if let Some(mode) = mode {
-                let stat = s.stat(&path)?;
-                // Linux cannot change a symbolic link's mode.
-                if mode_type(stat.st_mode) != FileType::Symlink {
-                    rfs::chmodat(
+                if uid.is_some() || gid.is_some() {
+                    rfs::chownat(
                         &s.root,
                         at(&path),
-                        Mode::from_raw_mode(mode & 0o7777),
-                        AtFlags::empty(),
+                        uid.map(rustix::process::Uid::from_raw),
+                        gid.map(rustix::process::Gid::from_raw),
+                        AtFlags::SYMLINK_NOFOLLOW,
                     )
                     .map_err(errno)?;
                 }
+                if atime.is_some() || mtime.is_some() {
+                    let times = Timestamps {
+                        last_access: timespec(atime),
+                        last_modification: timespec(mtime),
+                    };
+                    rfs::utimensat(&s.root, at(&path), &times, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(errno)?;
+                }
+                Ok(())
+            })();
+            if let Err(refusal) = result {
+                return reply.error(s.refuse(pid, "truncating", &path, refusal));
             }
-            if uid.is_some() || gid.is_some() {
-                rfs::chownat(
-                    &s.root,
-                    at(&path),
-                    uid.map(rustix::process::Uid::from_raw),
-                    gid.map(rustix::process::Gid::from_raw),
-                    AtFlags::SYMLINK_NOFOLLOW,
-                )
-                .map_err(errno)?;
+            match s.stat(&path) {
+                Ok(stat) => reply.attr(&TTL, &s.attr(ino.0, Some(&path), &stat)),
+                Err(err) => reply.error(err),
             }
-            if atime.is_some() || mtime.is_some() {
-                let times = Timestamps {
-                    last_access: timespec(atime),
-                    last_modification: timespec(mtime),
-                };
-                rfs::utimensat(&s.root, at(&path), &times, AtFlags::SYMLINK_NOFOLLOW)
-                    .map_err(errno)?;
-            }
-            Ok(())
-        })();
-        if let Err(refusal) = result {
-            return reply.error(s.refuse(req, "truncating", &path, refusal));
-        }
-        match s.stat(&path) {
-            Ok(stat) => reply.attr(&TTL, &s.attr(ino.0, Some(&path), &stat)),
-            Err(err) => reply.error(err),
-        }
+        });
     }
 
     fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
-        let s = &self.state;
-        let path = match s.path(ino) {
-            Ok(path) => path,
-            Err(err) => return reply.error(err),
-        };
-        let target = match rfs::readlinkat(&s.root, at(&path), Vec::new()) {
-            Ok(target) => PathBuf::from(OsString::from_vec(target.into_bytes())),
-            Err(err) => return reply.error(errno(err)),
-        };
-        // An absolute link into the source directory would lead out of the
-        // mount to the unredacted file: it leads to the same file in the
-        // mount instead.
-        let target = match target.strip_prefix(&s.source) {
-            Ok(rest)
-                if target.is_absolute()
-                    && !s.hidden.as_deref().is_some_and(|h| rest.starts_with(h)) =>
-            {
-                s.mountpoint.join(rest)
-            }
-            _ => target,
-        };
-        reply.data(target.as_os_str().as_bytes());
+        self.spawn(move |s| {
+            let path = match s.path(ino) {
+                Ok(path) => path,
+                Err(err) => return reply.error(err),
+            };
+            let target = match rfs::readlinkat(&s.root, at(&path), Vec::new()) {
+                Ok(target) => PathBuf::from(OsString::from_vec(target.into_bytes())),
+                Err(err) => return reply.error(errno(err)),
+            };
+            // An absolute link into the source directory would lead out of the
+            // mount to the unredacted file: it leads to the same file in the
+            // mount instead.
+            let target = match target.strip_prefix(&s.source) {
+                Ok(rest)
+                    if target.is_absolute()
+                        && !s.hidden.as_deref().is_some_and(|h| rest.starts_with(h)) =>
+                {
+                    s.mountpoint.join(rest)
+                }
+                _ => target,
+            };
+            reply.data(target.as_os_str().as_bytes());
+        });
     }
 
     fn mknod(
@@ -992,7 +1014,7 @@ impl Filesystem for VelociFs {
             Err(err) => return reply.error(err),
         };
         if let Err(refusal) = s.may_create(&path) {
-            return reply.error(s.refuse(req, "creating", &path, refusal));
+            return reply.error(s.refuse(req.pid(), "creating", &path, refusal));
         }
         if let Err(err) = rfs::mknodat(
             &s.root,
@@ -1024,7 +1046,7 @@ impl Filesystem for VelociFs {
             Err(err) => return reply.error(err),
         };
         if let Err(refusal) = s.may_create(&path) {
-            return reply.error(s.refuse(req, "creating", &path, refusal));
+            return reply.error(s.refuse(req.pid(), "creating", &path, refusal));
         }
         if let Err(err) = rfs::mkdirat(&s.root, at(&path), Mode::from_raw_mode(mode & 0o7777)) {
             return reply.error(errno(err));
@@ -1045,7 +1067,7 @@ impl Filesystem for VelociFs {
             return reply.error(Errno::ENOENT);
         }
         if let Err(refusal) = s.may_remove(&path) {
-            return reply.error(s.refuse(req, "deleting", &path, refusal));
+            return reply.error(s.refuse(req.pid(), "deleting", &path, refusal));
         }
         match rfs::unlinkat(&s.root, at(&path), AtFlags::empty()) {
             Ok(()) => {
@@ -1064,7 +1086,7 @@ impl Filesystem for VelociFs {
             Err(err) => return reply.error(err),
         };
         if let Err(refusal) = s.may_remove(&path) {
-            return reply.error(s.refuse(req, "deleting", &path, refusal));
+            return reply.error(s.refuse(req.pid(), "deleting", &path, refusal));
         }
         match rfs::unlinkat(&s.root, at(&path), AtFlags::REMOVEDIR) {
             Ok(()) => {
@@ -1090,7 +1112,7 @@ impl Filesystem for VelociFs {
             Err(err) => return reply.error(err),
         };
         if let Err(refusal) = s.may_create(&path) {
-            return reply.error(s.refuse(req, "creating", &path, refusal));
+            return reply.error(s.refuse(req.pid(), "creating", &path, refusal));
         }
         if let Err(err) = rfs::symlinkat(target, &s.root, at(&path)) {
             return reply.error(errno(err));
@@ -1111,69 +1133,75 @@ impl Filesystem for VelociFs {
         flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
-        let s = &self.state;
-        let (from, to) = match (s.child(parent, name), s.child(newparent, newname)) {
-            (Ok(from), Ok(to)) => (from, to),
-            (Err(err), _) | (_, Err(err)) => return reply.error(err),
-        };
-        // On a case-insensitive filesystem `to` may be an entry under another
-        // spelling, while the name the file ends up with is the one asked for.
-        // Both must pass.
-        let asked = to.with_file_name(newname);
-        let exchange = flags.contains(RenameFlags::RENAME_EXCHANGE);
-        let check = || -> Result<(), Refusal> {
-            if s.reserved(&from) {
-                return Err(Errno::ENOENT.into());
-            }
-            s.may_remove(&from)?;
-            if exchange {
-                s.may_remove(&to)?;
-                s.may_move(&to, &from)?;
-            } else {
-                s.may_create(&to)?;
-                s.may_create(&asked)?;
-                // Replacing another file overwrites it; renaming a file to
-                // another spelling of its own name does not.
-                let itself = match (s.stat(&from), s.stat(&to)) {
-                    (Ok(a), Ok(b)) => same_file(&a, &b),
-                    _ => false,
-                };
-                if !itself {
-                    s.may_write(&to)?;
+        let pid = req.pid();
+        let name = name.to_owned();
+        let newname = newname.to_owned();
+        self.spawn(move |s| {
+            let name = name.as_os_str();
+            let newname = newname.as_os_str();
+            let (from, to) = match (s.child(parent, name), s.child(newparent, newname)) {
+                (Ok(from), Ok(to)) => (from, to),
+                (Err(err), _) | (_, Err(err)) => return reply.error(err),
+            };
+            // On a case-insensitive filesystem `to` may be an entry under another
+            // spelling, while the name the file ends up with is the one asked for.
+            // Both must pass.
+            let asked = to.with_file_name(newname);
+            let exchange = flags.contains(RenameFlags::RENAME_EXCHANGE);
+            let check = || -> Result<(), Refusal> {
+                if s.reserved(&from) {
+                    return Err(Errno::ENOENT.into());
                 }
-            }
-            s.may_move(&from, &to)?;
-            if asked != to {
-                s.may_move(&from, &asked)?;
-            }
-            Ok(())
-        };
-        if let Err(refusal) = check() {
-            let op = format!("moving {} to", from.display());
-            return reply.error(s.refuse(req, &op, &asked, refusal));
-        }
-        match rfs::renameat_with(
-            &s.root,
-            at(&from),
-            &s.root,
-            at(&asked),
-            rfs::RenameFlags::from_bits_retain(flags.bits()),
-        ) {
-            Ok(()) => {
-                // The name it has now, which the filesystem decides.
-                let moved = s.child(newparent, newname).unwrap_or(asked);
+                s.may_remove(&from)?;
                 if exchange {
-                    s.inodes.exchange(&from, &moved);
+                    s.may_remove(&to)?;
+                    s.may_move(&to, &from)?;
                 } else {
-                    s.inodes.rename(&from, &moved);
+                    s.may_create(&to)?;
+                    s.may_create(&asked)?;
+                    // Replacing another file overwrites it; renaming a file to
+                    // another spelling of its own name does not.
+                    let itself = match (s.stat(&from), s.stat(&to)) {
+                        (Ok(a), Ok(b)) => same_file(&a, &b),
+                        _ => false,
+                    };
+                    if !itself {
+                        s.may_write(&to)?;
+                    }
                 }
-                s.changed(&from);
-                s.changed(&to);
-                s.changed(&moved);
-                reply.ok();
+                s.may_move(&from, &to)?;
+                if asked != to {
+                    s.may_move(&from, &asked)?;
+                }
+                Ok(())
+            };
+            if let Err(refusal) = check() {
+                let op = format!("moving {} to", from.display());
+                return reply.error(s.refuse(pid, &op, &asked, refusal));
             }
-            Err(err) => reply.error(errno(err)),
-        }
+            match rfs::renameat_with(
+                &s.root,
+                at(&from),
+                &s.root,
+                at(&asked),
+                rfs::RenameFlags::from_bits_retain(flags.bits()),
+            ) {
+                Ok(()) => {
+                    // The name it has now, which the filesystem decides.
+                    let moved = s.child(newparent, newname).unwrap_or(asked);
+                    if exchange {
+                        s.inodes.exchange(&from, &moved);
+                    } else {
+                        s.inodes.rename(&from, &moved);
+                    }
+                    s.changed(&from);
+                    s.changed(&to);
+                    s.changed(&moved);
+                    reply.ok();
+                }
+                Err(err) => reply.error(errno(err)),
+            }
+        });
     }
 
     fn link(
@@ -1184,29 +1212,33 @@ impl Filesystem for VelociFs {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        let s = &self.state;
-        let (from, to) = match (s.path(ino), s.child(newparent, newname)) {
-            (Ok(from), Ok(to)) => (from, to),
-            (Err(err), _) | (_, Err(err)) => return reply.error(err),
-        };
-        let check = || -> Result<(), Refusal> {
-            s.may_create(&to)?;
-            if s.is_config(&from) {
-                return Err(Reason::Config.into());
+        let pid = req.pid();
+        let newname = newname.to_owned();
+        self.spawn(move |s| {
+            let newname = newname.as_os_str();
+            let (from, to) = match (s.path(ino), s.child(newparent, newname)) {
+                (Ok(from), Ok(to)) => (from, to),
+                (Err(err), _) | (_, Err(err)) => return reply.error(err),
+            };
+            let check = || -> Result<(), Refusal> {
+                s.may_create(&to)?;
+                if s.is_config(&from) {
+                    return Err(Reason::Config.into());
+                }
+                s.may_move(&from, &to)
+            };
+            if let Err(refusal) = check() {
+                let op = format!("linking {} to", from.display());
+                return reply.error(s.refuse(pid, &op, &to, refusal));
             }
-            s.may_move(&from, &to)
-        };
-        if let Err(refusal) = check() {
-            let op = format!("linking {} to", from.display());
-            return reply.error(s.refuse(req, &op, &to, refusal));
-        }
-        if let Err(err) = rfs::linkat(&s.root, at(&from), &s.root, at(&to), AtFlags::empty()) {
-            return reply.error(errno(err));
-        }
-        match s.entry(&to) {
-            Ok(attr) => reply.entry(&TTL, &attr, Generation(0)),
-            Err(err) => reply.error(err),
-        }
+            if let Err(err) = rfs::linkat(&s.root, at(&from), &s.root, at(&to), AtFlags::empty()) {
+                return reply.error(errno(err));
+            }
+            match s.entry(&to) {
+                Ok(attr) => reply.entry(&TTL, &attr, Generation(0)),
+                Err(err) => reply.error(err),
+            }
+        });
     }
 
     fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
@@ -1225,7 +1257,7 @@ impl Filesystem for VelociFs {
         };
         let writable = writes(flags.0);
         if writable && let Err(refusal) = s.may_write(&path) {
-            return reply.error(s.refuse(req, "writing to", &path, refusal));
+            return reply.error(s.refuse(req.pid(), "writing to", &path, refusal));
         }
         let file = match s.open(&path, open_flags(flags.0), Mode::empty()) {
             Ok(file) => file,
@@ -1254,47 +1286,48 @@ impl Filesystem for VelociFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
-        let s = &self.state;
-        let handle = match s.handle(fh) {
-            Ok(handle) => handle,
-            Err(err) => return reply.error(err),
-        };
-        let slice = |data: &[u8]| -> Vec<u8> {
-            let start = (offset as usize).min(data.len());
-            let end = start.saturating_add(size as usize).min(data.len());
-            data[start..end].to_vec()
-        };
-        let open = match &*handle {
-            Handle::File(open) => open,
-            Handle::Denials(text) => return reply.data(&slice(text)),
-            Handle::Dir(_) => return reply.error(Errno::EISDIR),
-        };
-        for _ in 0..4 {
-            let (key, view) = match open.current(s) {
-                Ok(current) => current,
+        self.spawn(move |s| {
+            let handle = match s.handle(fh) {
+                Ok(handle) => handle,
                 Err(err) => return reply.error(err),
             };
-            match &view.class {
-                Class::Redacted => {
-                    let bytes = view.bytes.as_deref().unwrap_or_default();
-                    return reply.data(&slice(bytes));
-                }
-                Class::Failed(_) => return reply.error(Errno::EIO),
-                Class::Excluded | Class::Clean | Class::Binary => {
-                    let data = match read_range(&open.file, offset, size) {
-                        Ok(data) => data,
-                        Err(err) => return reply.error(io_errno(err)),
-                    };
-                    // Served only if the file did not change while read.
-                    match rfs::fstat(&open.file) {
-                        Ok(stat) if Key::of(&stat) == key => return reply.data(&data),
-                        Ok(_) => open.forget_view(),
-                        Err(err) => return reply.error(errno(err)),
+            let slice = |data: &[u8]| -> Vec<u8> {
+                let start = (offset as usize).min(data.len());
+                let end = start.saturating_add(size as usize).min(data.len());
+                data[start..end].to_vec()
+            };
+            let open = match &*handle {
+                Handle::File(open) => open,
+                Handle::Denials(text) => return reply.data(&slice(text)),
+                Handle::Dir(_) => return reply.error(Errno::EISDIR),
+            };
+            for _ in 0..4 {
+                let (key, view) = match open.current(s) {
+                    Ok(current) => current,
+                    Err(err) => return reply.error(err),
+                };
+                match &view.class {
+                    Class::Redacted => {
+                        let bytes = view.bytes.as_deref().unwrap_or_default();
+                        return reply.data(&slice(bytes));
+                    }
+                    Class::Failed(_) => return reply.error(Errno::EIO),
+                    Class::Excluded | Class::Clean | Class::Binary => {
+                        let data = match read_range(&open.file, offset, size) {
+                            Ok(data) => data,
+                            Err(err) => return reply.error(io_errno(err)),
+                        };
+                        // Served only if the file did not change while read.
+                        match rfs::fstat(&open.file) {
+                            Ok(stat) if Key::of(&stat) == key => return reply.data(&data),
+                            Ok(_) => open.forget_view(),
+                            Err(err) => return reply.error(errno(err)),
+                        }
                     }
                 }
             }
-        }
-        reply.error(Errno::EIO);
+            reply.error(Errno::EIO);
+        });
     }
 
     fn write(
@@ -1329,7 +1362,7 @@ impl Filesystem for VelociFs {
                     .next()
                     .is_some()
                 {
-                    let err = s.refuse(req, "writing to", &open.path, Reason::Token.into());
+                    let err = s.refuse(req.pid(), "writing to", &open.path, Reason::Token.into());
                     return reply.error(err);
                 }
             }
@@ -1512,27 +1545,30 @@ impl Filesystem for VelociFs {
     }
 
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
-        let s = &self.state;
-        if name == STATUS_XATTR {
-            return match s.status_text(ino.0) {
-                Ok(text) => reply_xattr(reply, size, text.as_bytes()),
-                Err(err) => reply.error(err),
+        let name = name.to_owned();
+        self.spawn(move |s| {
+            let name = name.as_os_str();
+            if name == STATUS_XATTR {
+                return match s.status_text(ino.0) {
+                    Ok(text) => reply_xattr(reply, size, text.as_bytes()),
+                    Err(err) => reply.error(err),
+                };
+            }
+            if ino.0 == STATUS_DIR || ino.0 == DENIALS {
+                return reply.error(Errno::NO_XATTR);
+            }
+            let path = match s.path(ino) {
+                Ok(path) => path,
+                Err(err) => return reply.error(err),
             };
-        }
-        if ino.0 == STATUS_DIR || ino.0 == DENIALS {
-            return reply.error(Errno::NO_XATTR);
-        }
-        let path = match s.path(ino) {
-            Ok(path) => path,
-            Err(err) => return reply.error(err),
-        };
-        let proc = s.proc_path(&path);
-        let mut buf = vec![0; size as usize];
-        match rfs::lgetxattr(&proc, name, &mut buf[..]) {
-            Ok(n) if size == 0 => reply.size(n as u32),
-            Ok(n) => reply.data(&buf[..n]),
-            Err(err) => reply.error(errno(err)),
-        }
+            let proc = s.proc_path(&path);
+            let mut buf = vec![0; size as usize];
+            match rfs::lgetxattr(&proc, name, &mut buf[..]) {
+                Ok(n) if size == 0 => reply.size(n as u32),
+                Ok(n) => reply.data(&buf[..n]),
+                Err(err) => reply.error(errno(err)),
+            }
+        });
     }
 
     fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
@@ -1575,25 +1611,26 @@ impl Filesystem for VelociFs {
     }
 
     fn access(&self, _req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
-        let s = &self.state;
-        if ino.0 == STATUS_DIR || ino.0 == DENIALS {
-            return if mask.contains(AccessFlags::W_OK) {
-                reply.error(Errno::EACCES)
-            } else {
-                reply.ok()
+        self.spawn(move |s| {
+            if ino.0 == STATUS_DIR || ino.0 == DENIALS {
+                return if mask.contains(AccessFlags::W_OK) {
+                    reply.error(Errno::EACCES)
+                } else {
+                    reply.ok()
+                };
+            }
+            let path = match s.path(ino) {
+                Ok(path) => path,
+                Err(err) => return reply.error(err),
             };
-        }
-        let path = match s.path(ino) {
-            Ok(path) => path,
-            Err(err) => return reply.error(err),
-        };
-        if mask.contains(AccessFlags::W_OK) && s.may_write(&path).is_err() {
-            return reply.error(Errno::EACCES);
-        }
-        match s.stat(&path) {
-            Ok(_) => reply.ok(),
-            Err(err) => reply.error(err),
-        }
+            if mask.contains(AccessFlags::W_OK) && s.may_write(&path).is_err() {
+                return reply.error(Errno::EACCES);
+            }
+            match s.stat(&path) {
+                Ok(_) => reply.ok(),
+                Err(err) => reply.error(err),
+            }
+        });
     }
 
     fn create(
@@ -1606,42 +1643,46 @@ impl Filesystem for VelociFs {
         flags: i32,
         reply: ReplyCreate,
     ) {
-        let s = &self.state;
-        let path = match s.child(parent, name) {
-            Ok(path) => path,
-            Err(err) => return reply.error(err),
-        };
-        let check = || -> Result<(), Refusal> {
-            s.may_create(&path)?;
-            if flags & libc::O_EXCL == 0 {
-                // Opening a file that is already there.
-                s.may_write(&path)?;
+        let pid = req.pid();
+        let name = name.to_owned();
+        self.spawn(move |s| {
+            let name = name.as_os_str();
+            let path = match s.child(parent, name) {
+                Ok(path) => path,
+                Err(err) => return reply.error(err),
+            };
+            let check = || -> Result<(), Refusal> {
+                s.may_create(&path)?;
+                if flags & libc::O_EXCL == 0 {
+                    // Opening a file that is already there.
+                    s.may_write(&path)?;
+                }
+                Ok(())
+            };
+            if let Err(refusal) = check() {
+                return reply.error(s.refuse(pid, "creating", &path, refusal));
             }
-            Ok(())
-        };
-        if let Err(refusal) = check() {
-            return reply.error(s.refuse(req, "creating", &path, refusal));
-        }
-        let mut oflags = open_flags(flags) | OFlags::CREATE;
-        if flags & libc::O_EXCL != 0 {
-            oflags |= OFlags::EXCL;
-        }
-        let file = match s.open(&path, oflags, Mode::from_raw_mode(mode & 0o7777)) {
-            Ok(file) => file,
-            Err(err) => return reply.error(err),
-        };
-        let attr = match s.entry(&path) {
-            Ok(attr) => attr,
-            Err(err) => return reply.error(err),
-        };
-        s.changed(&path);
-        let fh = s.add_handle(Handle::File(OpenFile {
-            file,
-            path,
-            writable: true,
-            view: Mutex::new(None),
-        }));
-        reply.created(&TTL, &attr, Generation(0), fh, FopenFlags::empty());
+            let mut oflags = open_flags(flags) | OFlags::CREATE;
+            if flags & libc::O_EXCL != 0 {
+                oflags |= OFlags::EXCL;
+            }
+            let file = match s.open(&path, oflags, Mode::from_raw_mode(mode & 0o7777)) {
+                Ok(file) => file,
+                Err(err) => return reply.error(err),
+            };
+            let attr = match s.entry(&path) {
+                Ok(attr) => attr,
+                Err(err) => return reply.error(err),
+            };
+            s.changed(&path);
+            let fh = s.add_handle(Handle::File(OpenFile {
+                file,
+                path,
+                writable: true,
+                view: Mutex::new(None),
+            }));
+            reply.created(&TTL, &attr, Generation(0), fh, FopenFlags::empty());
+        });
     }
 
     fn fallocate(

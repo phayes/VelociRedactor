@@ -4,6 +4,8 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
 
+use unicode_normalization::UnicodeNormalization;
+
 use super::view::{Class, View};
 use crate::util::CONFIG_FILE_NAMES;
 
@@ -46,9 +48,15 @@ impl fmt::Display for Reason {
     }
 }
 
-// Names are compared ignoring case: on a case-insensitive filesystem,
-// configuration discovery finds `Veloci.yml` as `veloci.yml`. On a
-// case-sensitive one this refuses a little more than it must.
+// Names are compared folded: on a case- or normalization-insensitive
+// filesystem, configuration discovery finds `Veloci.yml` as `veloci.yml`. On
+// a case-sensitive one this refuses a little more than it must.
+
+/// `name` as case- and normalization-insensitive filesystems compare it:
+/// lowercase, in Unicode normalization form C.
+pub fn fold(name: &OsStr) -> String {
+    name.to_string_lossy().to_lowercase().nfc().collect()
+}
 
 /// Whether an entry called `name` decides which configuration applies:
 /// a configuration file, or `.git`, where configuration discovery stops.
@@ -58,19 +66,20 @@ pub fn is_config_name(name: &OsStr) -> bool {
 
 /// Whether `name` is `.git`, in any case.
 pub fn is_git(name: &OsStr) -> bool {
-    name.eq_ignore_ascii_case(".git")
+    fold(name) == ".git"
 }
 
 fn is_config_file_name(name: &OsStr) -> bool {
+    let name = fold(name);
     CONFIG_FILE_NAMES
         .iter()
-        .any(|n| name.eq_ignore_ascii_case(n))
+        .any(|n| name == fold(OsStr::new(n)))
 }
 
 /// Whether `path`, relative to the source directory, is a configuration
 /// file: named like one, or `config`, the one named on the command line.
 pub fn is_config_path(path: &Path, config: Option<&Path>) -> bool {
-    config.is_some_and(|c| c.as_os_str().eq_ignore_ascii_case(path))
+    config.is_some_and(|c| fold(c.as_os_str()) == fold(path.as_os_str()))
         || path.file_name().is_some_and(is_config_file_name)
 }
 
@@ -156,6 +165,12 @@ mod tests {
         assert!(!is_config_name(OsStr::new("veloci.yaml.bak")));
         assert!(is_config_name(OsStr::new("Veloci.YML")));
         assert!(is_config_name(OsStr::new(".GIT")));
+        // The Kelvin sign lowercases to `k`, and `é` has two encodings.
+        assert_eq!(fold(OsStr::new("\u{212A}ey")), "key");
+        assert_eq!(
+            fold(OsStr::new("Cafe\u{0301}")),
+            fold(OsStr::new("caf\u{00e9}"))
+        );
         assert!(is_config_path(Path::new("a/veloci.yml"), None));
         assert!(is_config_path(
             Path::new("conf/rules.yml"),
